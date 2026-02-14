@@ -1,0 +1,77 @@
+services:
+
+  api:
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      PGRST_DB_ANON_ROLE: postgres
+      PGRST_DB_SCHEMAS: "${PGRST_DB_SCHEMAS:-public}"
+      PGRST_DB_URI: 'postgres://postgres@db'
+    image: postgrest/postgrest
+    restart: unless-stopped
+
+  cgi:
+    image: php:fpm-alpine
+    restart: unless-stopped
+    user: "${UID:-1000}:${GID:-1000}"
+    volumes:
+      - "${DOCUMENT_ROOT:-/srv}:/srv/www:ro"
+      - "${MEDIA_ROOT:-/srv}:/srv/media:ro"
+      - "${TMP_DIR:-/var/tmp}:/var/tmp"
+
+  db:
+    environment:
+      POSTGRES_HOST_AUTH_METHOD: trust
+    healthcheck:
+      interval: 1s
+      retries: 10
+      test:
+        - 'CMD'
+        - 'pg_isready'
+        - '-U'
+        - 'postgres'
+      timeout: 1s
+    image: postgres:alpine
+    ports:
+      - "${PGPORT:-5432}:5432"
+    restart: unless-stopped
+    volumes:
+      - './src/db/migrations:/docker-entrypoint-initdb.d'
+      - './src/db/cron:/etc/periodic:ro'
+      - "${TMP_DIR:-/var/tmp}:/var/tmp"
+      - 'db_data:/var/lib/postgresql/data'
+
+  http:
+    environment:
+      APEX_DOMAIN: "${APEX_DOMAIN:-localhost}"
+    image: caddy:alpine
+    ports:
+      - '80:80'
+      - '443:443'
+      - '443:443/udp'
+    restart: unless-stopped
+    volumes:
+      - './src/http/Caddyfile:/etc/caddy/Caddyfile:ro'
+      - './src/http/_pki:/data/caddy/pki/authorities/local'
+      - "${DOCUMENT_ROOT:-/srv}:/srv/www:ro"
+      - "${MEDIA_ROOT:-/srv}:/srv/media:ro"
+      - "${TMP_DIR:-/var/tmp}:/var/tmp"
+
+  media:
+    command: '--noauth'
+    image: filebrowser/filebrowser
+    restart: unless-stopped
+    volumes:
+      - "${MEDIA_ROOT:-/srv}:/srv"
+      - "${TMP_DIR:-/var/tmp}:/var/tmp"
+      - 'tus_db:/database'
+
+
+volumes:
+
+  db_data:
+  http_data:
+  tus_db:
+
+

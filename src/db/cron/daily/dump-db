@@ -1,0 +1,3 @@
+#!/bin/sh
+
+pg_dump -U postgres > /docker-entrypoint-initdb.d/_dump.sql

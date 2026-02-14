@@ -1,0 +1,47 @@
+{
+	local_certs
+}
+
+
+(base_config) {
+
+	log {
+		output stdout
+		format console
+	}
+
+	encode zstd gzip
+	file_server browse
+	root * /srv/www/{host}
+
+	php_fastcgi cgi:9000
+
+	handle_path /api* {
+		reverse_proxy api:3000
+	}
+
+	handle_path /cdn* {
+		root /srv/www/cdn.{$APEX_DOMAIN}
+	}
+
+	handle_path /media* {
+		root /srv/media
+	}
+
+}
+
+
+{$APEX_DOMAIN} {
+	root * /srv/www
+	file_server browse
+}
+
+
+*.{$APEX_DOMAIN} {
+	import base_config
+}
+
+
+drive.{$APEX_DOMAIN} {
+	reverse_proxy http://media
+}
