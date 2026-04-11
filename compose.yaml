@@ -37,8 +37,8 @@ services:
       - "${PGPORT:-5432}:5432"
     restart: unless-stopped
     volumes:
-      - './src/db/migrations:/docker-entrypoint-initdb.d'
-      - './src/db/cron:/etc/periodic:ro'
+      - './volumes/db/migrations:/docker-entrypoint-initdb.d'
+      - './volumes/db/cron:/etc/periodic:ro'
       - "${TMP_DIR:-/var/tmp}:/var/tmp"
       - 'db_data:/var/lib/postgresql/data'
 
@@ -52,8 +52,8 @@ services:
       - '443:443/udp'
     restart: unless-stopped
     volumes:
-      - './src/http/Caddyfile:/etc/caddy/Caddyfile:ro'
-      - './src/http/_pki:/data/caddy/pki/authorities/local'
+      - './volumes/http/Caddyfile:/etc/caddy/Caddyfile:ro'
+      - './volumes/http/_pki:/data/caddy/pki/authorities/local'
       - "${DOCUMENT_ROOT:-/srv}:/srv/www:ro"
       - "${MEDIA_ROOT:-/srv}:/srv/media:ro"
       - "${TMP_DIR:-/var/tmp}:/var/tmp"
