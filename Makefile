@@ -3,4 +3,11 @@
 
 all:
 
-	@docker compose --env-file .env up
+	@./install.sh
+
+
+dock:
+
+	@docker build --no-cache -t strife .
+
+

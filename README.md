@@ -1,4 +1,8 @@
 # Strife
+
 ### Instant, personal BaaS.
 ---
-Run: `docker compose up`
+
+###### USAGE
+
+`make && Strife`
