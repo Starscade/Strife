@@ -70,9 +70,22 @@ func handleLuaScript(w http.ResponseWriter, r *http.Request, scriptPath string) 
 }
 
 func main() {
+	dbPath := os.Getenv("STRIFE_DB")
+	if dbPath == "" {
+		dbPath = ":memory:"
+	}
+	db, err := sql.Open("sqlite", dbPath)
+	if err == nil {
+		defer db.Close()
+	}
+
+	htmlIndex := os.Getenv("STRIFE_INDEX")
+	if htmlIndex == "" {
+		htmlIndex = "index.html"
+	}
+
 	portEnv := os.Getenv("STRIFE_PORT")
 	var port int
-	var err error
 	if portEnv == "" {
 		port = 8080
 	} else {
@@ -85,15 +98,6 @@ func main() {
 	rootDir := os.Getenv("STRIFE_ROOT")
 	if rootDir == "" {
 		rootDir = "."
-	}
-
-	dbPath := os.Getenv("STRIFE_DB")
-	if dbPath == "" {
-		dbPath = ":memory:"
-	}
-	db, err := sql.Open("sqlite", dbPath)
-	if err == nil {
-		defer db.Close()
 	}
 
 	mux := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -221,7 +225,7 @@ func main() {
 
 		if err == nil {
 			if info.IsDir() {
-				indexPath := filepath.Join(targetPath, "index.html")
+				indexPath := filepath.Join(targetPath, htmlIndex)
 				if indexInfo, err := os.Stat(indexPath); err == nil && !indexInfo.IsDir() {
 					http.ServeFile(w, r, indexPath)
 					return
@@ -257,7 +261,7 @@ func main() {
 				return
 			}
 		} else if strings.HasSuffix(r.URL.Path, "/") {
-			indexPath := filepath.Join(targetPath, "index.html")
+			indexPath := filepath.Join(targetPath, htmlIndex)
 			if indexInfo, err := os.Stat(indexPath); err == nil && !indexInfo.IsDir() {
 				http.ServeFile(w, r, indexPath)
 				return
@@ -331,9 +335,10 @@ func main() {
 
 	logData := map[string]interface{}{
 		"details": map[string]interface{}{
-			"port": port,
-			"db":   dbPath,
-			"root": rootDir,
+			"db":    dbPath,
+			"index": htmlIndex,
+			"port":  port,
+			"root":  rootDir,
 		},
 		"level":     "INFO",
 		"timestamp": time.Now().Format(time.RFC3339),
