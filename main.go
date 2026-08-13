@@ -128,7 +128,7 @@ func main() {
 			return
 		}
 
-		if r.Method == http.MethodPost && db != nil && !strings.HasSuffix(r.URL.Path, ".lua") {
+		if r.Method == http.MethodPost && db != nil && !strings.HasSuffix(r.URL.Path, ".lua") && r.Header.Get("Content-Type") == "application/sql" {
 			bodyBytes, err := io.ReadAll(r.Body)
 			if err == nil {
 				query := strings.TrimSpace(string(bodyBytes))
