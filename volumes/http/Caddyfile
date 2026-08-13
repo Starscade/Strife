@@ -1,31 +1,29 @@
 {
-	local_certs
+	{$TLS_MODE}
 }
 
 
 (base_config) {
 
 	log {
-		output stdout
 		format console
+		output stdout
 	}
 
 	encode zstd gzip
 	file_server browse
 	root * /srv/www/{host}
 
-	php_fastcgi cgi:9000
-
 	handle_path /api* {
 		reverse_proxy api:3000
 	}
 
-	handle_path /cdn* {
-		root /srv/www/cdn.{$APEX_DOMAIN}
-	}
-
 	handle_path /media* {
 		root /srv/media
+	}
+
+	handle_path /proxy* {
+		reverse_proxy {path}
 	}
 
 }
