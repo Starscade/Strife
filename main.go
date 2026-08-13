@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -17,6 +18,7 @@ import (
 	"time"
 
 	_ "modernc.org/sqlite"
+	lua "github.com/yuin/gopher-lua"
 )
 
 type contextKey string
@@ -38,6 +40,32 @@ func (rec *responseRecorder) Write(b []byte) (int, error) {
 	n, err := rec.ResponseWriter.Write(b)
 	rec.size += int64(n)
 	return n, err
+}
+
+func handleLuaScript(w http.ResponseWriter, r *http.Request, scriptPath string) {
+	L := lua.NewState()
+	defer L.Close()
+
+	var stdout bytes.Buffer
+	L.SetGlobal("print", L.NewFunction(func(L *lua.LState) int {
+		top := L.GetTop()
+		var args []string
+		for i := 1; i <= top; i++ {
+			args = append(args, L.ToString(i))
+		}
+		stdout.WriteString(strings.Join(args, "\t") + "\n")
+		return 0
+	}))
+
+	err := L.DoFile(scriptPath)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte(fmt.Sprintf("Lua error: %v", err)))
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	w.Write(stdout.Bytes())
 }
 
 func main() {
@@ -100,7 +128,7 @@ func main() {
 			return
 		}
 
-		if r.Method == http.MethodPost && db != nil {
+		if r.Method == http.MethodPost && db != nil && !strings.HasSuffix(r.URL.Path, ".lua") {
 			bodyBytes, err := io.ReadAll(r.Body)
 			if err == nil {
 				query := strings.TrimSpace(string(bodyBytes))
@@ -169,6 +197,13 @@ func main() {
 
 		cleanPath := filepath.FromSlash(r.URL.Path)
 		targetPath := filepath.Join(dir, cleanPath)
+
+		if strings.HasSuffix(targetPath, ".lua") {
+			if info, err := os.Stat(targetPath); err == nil && !info.IsDir() {
+				handleLuaScript(w, r, targetPath)
+				return
+			}
+		}
 
 		info, err := os.Stat(targetPath)
 		if os.IsNotExist(err) {
