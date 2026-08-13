@@ -298,17 +298,24 @@ func main() {
 		mux.ServeHTTP(rec, r)
 		duration := time.Since(start)
 
+		requestHost := r.Host
+		if h, _, err := net.SplitHostPort(requestHost); err == nil {
+			requestHost = h
+		}
+
 		logData := map[string]interface{}{
-			"timestamp": time.Now().Format(time.RFC3339),
-			"level":     "INFO",
-			"topic":     "REQUEST",
 			"details": map[string]interface{}{
-				"method":   r.Method,
-				"path":     r.URL.Path,
-				"remote":   r.RemoteAddr,
-				"status":   rec.status,
-				"duration": duration.Seconds(),
+				"duration":   duration.Seconds(),
+				"host":       requestHost,
+				"ip_address": r.RemoteAddr,
+				"method":     r.Method,
+				"path":       r.URL.Path,
+				"status":     rec.status,
+				"user_agent": r.UserAgent(),
 			},
+			"level":     "INFO",
+			"timestamp": time.Now().Format(time.RFC3339),
+			"topic":     "REQUEST",
 		}
 		logJSON, _ := json.Marshal(logData)
 		fmt.Println(string(logJSON))
@@ -323,14 +330,14 @@ func main() {
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 
 	logData := map[string]interface{}{
-		"timestamp": time.Now().Format(time.RFC3339),
-		"level":     "INFO",
-		"topic":     "SERVER_START",
 		"details": map[string]interface{}{
 			"port": port,
 			"db":   dbPath,
 			"root": rootDir,
 		},
+		"level":     "INFO",
+		"timestamp": time.Now().Format(time.RFC3339),
+		"topic":     "SERVER_START",
 	}
 	logJSON, _ := json.Marshal(logData)
 	fmt.Println(string(logJSON))
@@ -338,12 +345,12 @@ func main() {
 	go func() {
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			errLogData := map[string]interface{}{
-				"timestamp": time.Now().Format(time.RFC3339),
-				"level":     "ERROR",
-				"topic":     "SERVER_STOP",
 				"details": map[string]string{
 					"error": err.Error(),
 				},
+				"level":     "ERROR",
+				"timestamp": time.Now().Format(time.RFC3339),
+				"topic":     "SERVER_STOP",
 			}
 			errLogJSON, _ := json.Marshal(errLogData)
 			fmt.Println(string(errLogJSON))
@@ -362,12 +369,12 @@ func main() {
 	_ = server.Shutdown(shutdownCtx)
 
 	stopLogData := map[string]interface{}{
-		"timestamp": time.Now().Format(time.RFC3339),
-		"level":     "INFO",
-		"topic":     "SERVER_STOP",
 		"details": map[string]string{
 			"signal": sig.String(),
 		},
+		"level":     "INFO",
+		"timestamp": time.Now().Format(time.RFC3339),
+		"topic":     "SERVER_STOP",
 	}
 	stopLogJSON, _ := json.Marshal(stopLogData)
 	fmt.Println(string(stopLogJSON))
