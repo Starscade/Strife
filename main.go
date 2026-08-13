@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -69,9 +70,16 @@ func handleLuaScript(w http.ResponseWriter, r *http.Request, scriptPath string) 
 }
 
 func main() {
-	port := os.Getenv("STRIFE_PORT")
-	if port == "" {
-		port = "8080"
+	portEnv := os.Getenv("STRIFE_PORT")
+	var port int
+	var err error
+	if portEnv == "" {
+		port = 8080
+	} else {
+		port, err = strconv.Atoi(portEnv)
+		if err != nil {
+			port = 8080
+		}
 	}
 
 	rootDir := os.Getenv("STRIFE_ROOT")
@@ -294,12 +302,12 @@ func main() {
 			"timestamp": time.Now().Format(time.RFC3339),
 			"level":     "INFO",
 			"topic":     "REQUEST",
-			"details": map[string]string{
+			"details": map[string]interface{}{
 				"method":   r.Method,
 				"path":     r.URL.Path,
 				"remote":   r.RemoteAddr,
-				"status":   fmt.Sprintf("%d", rec.status),
-				"duration": duration.String(),
+				"status":   rec.status,
+				"duration": duration.Seconds(),
 			},
 		}
 		logJSON, _ := json.Marshal(logData)
@@ -307,7 +315,7 @@ func main() {
 	})
 
 	server := &http.Server{
-		Addr:    ":" + port,
+		Addr:    ":" + strconv.Itoa(port),
 		Handler: handler,
 	}
 
@@ -318,7 +326,7 @@ func main() {
 		"timestamp": time.Now().Format(time.RFC3339),
 		"level":     "INFO",
 		"topic":     "SERVER_START",
-		"details": map[string]string{
+		"details": map[string]interface{}{
 			"port": port,
 			"db":   dbPath,
 			"root": rootDir,
