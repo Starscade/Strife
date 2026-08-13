@@ -153,7 +153,7 @@ func main() {
 				return
 			}
 
-			w.WriteHeader(http.StatusOK)
+			w.WriteHeader(http.StatusCreated)
 			return
 		}
 
