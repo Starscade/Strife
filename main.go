@@ -146,6 +146,10 @@ func main() {
 				query := strings.TrimSpace(string(bodyBytes))
 				if query != "" {
 					acceptHeader := r.Header.Get("Accept")
+					if acceptHeader != "" && !strings.Contains(acceptHeader, "application/json") && !strings.Contains(acceptHeader, "text/csv") && !strings.Contains(acceptHeader, "text/html") && !strings.Contains(acceptHeader, "*/*") {
+						w.WriteHeader(http.StatusNotAcceptable)
+						return
+					}
 
 					rows, err := db.QueryContext(r.Context(), query)
 					if err != nil {
