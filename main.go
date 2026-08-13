@@ -135,6 +135,11 @@ func main() {
 				return
 			}
 
+			if _, err := os.Stat(targetPath); err == nil {
+				w.WriteHeader(http.StatusConflict)
+				return
+			}
+
 			outFile, err := os.Create(targetPath)
 			if err != nil {
 				w.WriteHeader(http.StatusInternalServerError)
