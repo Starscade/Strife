@@ -370,7 +370,7 @@ func main() {
 		start := time.Now()
 		rec := &responseRecorder{ResponseWriter: w, status: http.StatusOK}
 		mux.ServeHTTP(rec, r)
-		duration := time.Since(start)
+		executionMs := float64(time.Since(start).Microseconds()) / 1000.0
 
 		requestHost := r.Host
 		if h, _, err := net.SplitHostPort(requestHost); err == nil {
@@ -379,13 +379,13 @@ func main() {
 
 		logData := map[string]interface{}{
 			"details": map[string]interface{}{
-				"duration":   duration.Seconds(),
-				"host":       requestHost,
-				"ip_address": r.RemoteAddr,
-				"method":     r.Method,
-				"path":       r.URL.Path,
-				"status":     rec.status,
-				"user_agent": r.UserAgent(),
+				"execution_ms": executionMs,
+				"host":         requestHost,
+				"ip_address":   r.RemoteAddr,
+				"method":       r.Method,
+				"path":         r.URL.Path,
+				"status":       rec.status,
+				"user_agent":   r.UserAgent(),
 			},
 			"level":     "INFO",
 			"timestamp": time.Now().Format(time.RFC3339),
