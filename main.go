@@ -145,8 +145,21 @@ func main() {
 			if err == nil {
 				query := strings.TrimSpace(string(bodyBytes))
 				if query != "" {
+					acceptHeader := r.Header.Get("Accept")
+
 					rows, err := db.QueryContext(r.Context(), query)
 					if err != nil {
+						if strings.Contains(acceptHeader, "text/html") {
+							w.Header().Set("Content-Type", "text/html; charset=utf-8")
+							w.WriteHeader(http.StatusBadRequest)
+							fmt.Fprintf(w, "<p>error: %s</p>", html.EscapeString(err.Error()))
+							return
+						} else if strings.Contains(acceptHeader, "text/csv") {
+							w.Header().Set("Content-Type", "text/csv; charset=utf-8")
+							w.WriteHeader(http.StatusBadRequest)
+							fmt.Fprintf(w, "error\n%q\n", err.Error())
+							return
+						}
 						w.Header().Set("Content-Type", "application/json")
 						w.WriteHeader(http.StatusBadRequest)
 						json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
@@ -156,6 +169,17 @@ func main() {
 
 					cols, err := rows.Columns()
 					if err != nil {
+						if strings.Contains(acceptHeader, "text/html") {
+							w.Header().Set("Content-Type", "text/html; charset=utf-8")
+							w.WriteHeader(http.StatusInternalServerError)
+							fmt.Fprintf(w, "<p>error: %s</p>", html.EscapeString(err.Error()))
+							return
+						} else if strings.Contains(acceptHeader, "text/csv") {
+							w.Header().Set("Content-Type", "text/csv; charset=utf-8")
+							w.WriteHeader(http.StatusInternalServerError)
+							fmt.Fprintf(w, "error\n%q\n", err.Error())
+							return
+						}
 						w.Header().Set("Content-Type", "application/json")
 						w.WriteHeader(http.StatusInternalServerError)
 						json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
@@ -188,6 +212,48 @@ func main() {
 
 					if len(results) == 0 {
 						w.WriteHeader(http.StatusNoContent)
+						return
+					}
+
+					if strings.Contains(acceptHeader, "text/html") {
+						w.Header().Set("Content-Type", "text/html; charset=utf-8")
+						w.WriteHeader(http.StatusOK)
+						fmt.Fprintf(w, "<table><tr>")
+						for _, col := range cols {
+							fmt.Fprintf(w, "<th>%s</th>", html.EscapeString(col))
+						}
+						fmt.Fprintf(w, "</tr>")
+						for _, row := range results {
+							fmt.Fprintf(w, "<tr>")
+							for _, col := range cols {
+								valStr := ""
+								if v := row[col]; v != nil {
+									valStr = fmt.Sprintf("%v", v)
+								}
+								fmt.Fprintf(w, "<td>%s</td>", html.EscapeString(valStr))
+							}
+							fmt.Fprintf(w, "</tr>")
+						}
+						fmt.Fprintf(w, "</table>")
+						return
+					} else if strings.Contains(acceptHeader, "text/csv") {
+						w.Header().Set("Content-Type", "text/csv; charset=utf-8")
+						w.WriteHeader(http.StatusOK)
+						fmt.Fprintf(w, "%s\n", strings.Join(cols, ","))
+						for _, row := range results {
+							vals := make([]string, len(cols))
+							for i, col := range cols {
+								valStr := ""
+								if v := row[col]; v != nil {
+									valStr = fmt.Sprintf("%v", v)
+								}
+								if strings.Contains(valStr, ",") || strings.Contains(valStr, "\"") || strings.Contains(valStr, "\n") {
+									valStr = "\"" + strings.ReplaceAll(valStr, "\"", "\"\"") + "\""
+								}
+								vals[i] = valStr
+							}
+							fmt.Fprintf(w, "%s\n", strings.Join(vals, ","))
+						}
 						return
 					}
 
