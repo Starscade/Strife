@@ -43,6 +43,18 @@ func (rec *responseRecorder) Write(b []byte) (int, error) {
 	return n, err
 }
 
+func writeLog(level, topic string, details interface{}) {
+	logData := map[string]interface{}{
+		"details":   details,
+		"level":     level,
+		"timestamp": time.Now().Format(time.RFC3339),
+		"topic":     topic,
+	}
+	if logJSON, err := json.Marshal(logData); err == nil {
+		fmt.Println(string(logJSON))
+	}
+}
+
 func handleLuaScript(w http.ResponseWriter, r *http.Request, scriptPath string) {
 	L := lua.NewState()
 	defer L.Close()
@@ -377,22 +389,15 @@ func main() {
 			requestHost = h
 		}
 
-		logData := map[string]interface{}{
-			"details": map[string]interface{}{
-				"execution_ms": executionMs,
-				"host":         requestHost,
-				"ip_address":   r.RemoteAddr,
-				"method":       r.Method,
-				"path":         r.URL.Path,
-				"status":       rec.status,
-				"user_agent":   r.UserAgent(),
-			},
-			"level":     "INFO",
-			"timestamp": time.Now().Format(time.RFC3339),
-			"topic":     "REQUEST",
-		}
-		logJSON, _ := json.Marshal(logData)
-		fmt.Println(string(logJSON))
+		writeLog("INFO", "REQUEST", map[string]interface{}{
+			"execution_ms": executionMs,
+			"host":         requestHost,
+			"ip_address":   r.RemoteAddr,
+			"method":       r.Method,
+			"path":         r.URL.Path,
+			"status":       rec.status,
+			"user_agent":   r.UserAgent(),
+		})
 	})
 
 	server := &http.Server{
@@ -403,32 +408,18 @@ func main() {
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 
-	logData := map[string]interface{}{
-		"details": map[string]interface{}{
-			"db":    dbPath,
-			"index": htmlIndex,
-			"port":  port,
-			"root":  rootDir,
-		},
-		"level":     "INFO",
-		"timestamp": time.Now().Format(time.RFC3339),
-		"topic":     "SERVER_START",
-	}
-	logJSON, _ := json.Marshal(logData)
-	fmt.Println(string(logJSON))
+	writeLog("INFO", "SERVER_START", map[string]interface{}{
+		"db":    dbPath,
+		"index": htmlIndex,
+		"port":  port,
+		"root":  rootDir,
+	})
 
 	go func() {
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			errLogData := map[string]interface{}{
-				"details": map[string]string{
-					"error": err.Error(),
-				},
-				"level":     "ERROR",
-				"timestamp": time.Now().Format(time.RFC3339),
-				"topic":     "SERVER_STOP",
-			}
-			errLogJSON, _ := json.Marshal(errLogData)
-			fmt.Println(string(errLogJSON))
+			writeLog("ERROR", "SERVER_STOP", map[string]string{
+				"error": err.Error(),
+			})
 			os.Exit(1)
 		}
 	}()
@@ -443,15 +434,8 @@ func main() {
 	defer cancel()
 	_ = server.Shutdown(shutdownCtx)
 
-	stopLogData := map[string]interface{}{
-		"details": map[string]string{
-			"signal": sig.String(),
-		},
-		"level":     "INFO",
-		"timestamp": time.Now().Format(time.RFC3339),
-		"topic":     "SERVER_STOP",
-	}
-	stopLogJSON, _ := json.Marshal(stopLogData)
-	fmt.Println(string(stopLogJSON))
+	writeLog("INFO", "SERVER_STOP", map[string]string{
+		"signal": sig.String(),
+	})
 	os.Exit(0)
 }
