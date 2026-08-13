@@ -17,8 +17,8 @@ import (
 	"syscall"
 	"time"
 
-	_ "modernc.org/sqlite"
 	lua "github.com/yuin/gopher-lua"
+	_ "modernc.org/sqlite"
 )
 
 type contextKey string
