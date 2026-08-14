@@ -118,7 +118,7 @@ func main() {
 
 	defaultTrashDir := os.Getenv("STRIFE_TRASH")
 	if defaultTrashDir == "" {
-		defaultTrashDir = "/tmp/Strife/Trash"
+		defaultTrashDir = filepath.Join(rootDir, ".Trash")
 	}
 
 	mux := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
