@@ -26,6 +26,9 @@ type contextKey string
 
 const cancelKey contextKey = "cancel"
 
+const dirListingTemplateStart = "<!DOCTYPE html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><title>&zwj;</title></head><body><ul>"
+const dirListingTemplateEnd = "</ul></body></html>"
+
 type responseRecorder struct {
 	http.ResponseWriter
 	status int
@@ -391,7 +394,7 @@ func main() {
 				}
 
 				w.Header().Set("Content-Type", "text/html; charset=utf-8")
-				fmt.Fprintf(w, "<ul>")
+				fmt.Fprintf(w, "%s", dirListingTemplateStart)
 				if r.URL.Path != "/" && r.URL.Path != "" {
 					fmt.Fprintf(w, "<li><a href=\"..\">../</a></li>")
 				}
@@ -403,7 +406,7 @@ func main() {
 					safeName := html.EscapeString(urlPath)
 					fmt.Fprintf(w, "<li><a href=\"%s\">%s</a></li>", safeName, safeName)
 				}
-				fmt.Fprintf(w, "</ul>")
+				fmt.Fprintf(w, "%s", dirListingTemplateEnd)
 				return
 			}
 		} else if strings.HasSuffix(r.URL.Path, "/") {
@@ -421,7 +424,7 @@ func main() {
 				f.Close()
 				if readdirErr == nil {
 					w.Header().Set("Content-Type", "text/html; charset=utf-8")
-					fmt.Fprintf(w, "<ul>")
+					fmt.Fprintf(w, "%s", dirListingTemplateStart)
 					if r.URL.Path != "/" && r.URL.Path != "" {
 						fmt.Fprintf(w, "<li><a href=\"..\">../</a></li>")
 					}
@@ -433,7 +436,7 @@ func main() {
 						safeName := html.EscapeString(urlPath)
 						fmt.Fprintf(w, "<li><a href=\"%s\">%s</a></li>", safeName, safeName)
 					}
-					fmt.Fprintf(w, "</ul>")
+					fmt.Fprintf(w, "%s", dirListingTemplateEnd)
 					return
 				}
 			}
