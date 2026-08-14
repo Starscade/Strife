@@ -113,6 +113,11 @@ func main() {
 		rootDir = "."
 	}
 
+	defaultTrashDir := os.Getenv("STRIFE_TRASH")
+	if defaultTrashDir == "" {
+		defaultTrashDir = "/tmp/Strife/Trash"
+	}
+
 	mux := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		host := r.Host
 		if h, _, err := net.SplitHostPort(host); err == nil {
@@ -120,6 +125,59 @@ func main() {
 		}
 
 		dir := filepath.Join(rootDir, host)
+
+		if r.Method == http.MethodDelete {
+			if _, err := os.Stat(dir); os.IsNotExist(err) {
+				writeLog("ERROR", "DELETE", map[string]string{"error": "Directory not found.", "path": dir})
+				w.WriteHeader(http.StatusNotFound)
+				return
+			}
+
+			cleanPath := filepath.FromSlash(r.URL.Path)
+			targetPath := filepath.Join(dir, cleanPath)
+
+			info, err := os.Stat(targetPath)
+			if os.IsNotExist(err) {
+				writeLog("ERROR", "DELETE", map[string]string{"error": "File not found.", "path": targetPath})
+				w.WriteHeader(http.StatusNotFound)
+				return
+			} else if err != nil {
+				writeLog("ERROR", "DELETE", map[string]string{"error": err.Error(), "path": targetPath})
+				w.WriteHeader(http.StatusInternalServerError)
+				return
+			}
+
+			if info.IsDir() {
+				details := map[string]string{"error": "Cannot delete directories.", "path": targetPath}
+				writeLog("ERROR", "DELETE", details)
+				logData := map[string]interface{}{
+					"details":   details,
+					"level":     "ERROR",
+					"timestamp": time.Now().Format(time.RFC3339),
+					"topic":     "DELETE",
+				}
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusBadRequest)
+				json.NewEncoder(w).Encode(logData)
+				return
+			}
+
+			trashDir := filepath.Join(defaultTrashDir, host, cleanPath)
+			if err := os.MkdirAll(filepath.Dir(trashDir), 0755); err != nil {
+				writeLog("ERROR", "DELETE", map[string]string{"error": err.Error(), "path": trashDir})
+				w.WriteHeader(http.StatusInternalServerError)
+				return
+			}
+
+			if err := os.Rename(targetPath, trashDir); err != nil {
+				writeLog("ERROR", "DELETE", map[string]string{"error": err.Error(), "from": targetPath, "to": trashDir})
+				w.WriteHeader(http.StatusInternalServerError)
+				return
+			}
+
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
 
 		if r.Method == http.MethodPut {
 			if _, err := os.Stat(dir); os.IsNotExist(err) {
@@ -415,10 +473,11 @@ func main() {
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 
 	writeLog("INFO", "SERVER_START", map[string]interface{}{
-		"db":    dbPath,
-		"index": htmlIndex,
-		"port":  port,
-		"root":  rootDir,
+		"db":      dbPath,
+		"garbage": defaultTrashDir,
+		"index":   htmlIndex,
+		"port":    port,
+		"root":    rootDir,
 	})
 
 	go func() {
