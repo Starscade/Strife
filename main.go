@@ -58,7 +58,7 @@ func writeLog(level, topic string, details interface{}) {
 	}
 }
 
-func handleLuaScript(w http.ResponseWriter, r *http.Request, scriptPath string) {
+func handleLuaScript(w http.ResponseWriter, r *http.Request, scriptPath string, db *sql.DB) {
 	L := lua.NewState()
 	defer L.Close()
 
@@ -73,7 +73,72 @@ func handleLuaScript(w http.ResponseWriter, r *http.Request, scriptPath string) 
 		return 0
 	}))
 
-	// Pass full Request metadata via a global table 'REQUEST'
+	L.SetGlobal("db_query", L.NewFunction(func(L *lua.LState) int {
+		if db == nil {
+			L.Push(lua.LNil)
+			L.Push(lua.LString("database not initialized"))
+			return 2
+		}
+		query := L.CheckString(1)
+		rows, err := db.QueryContext(r.Context(), query)
+		if err != nil {
+			L.Push(lua.LNil)
+			L.Push(lua.LString(err.Error()))
+			return 2
+		}
+		defer rows.Close()
+
+		cols, err := rows.Columns()
+		if err != nil {
+			L.Push(lua.LNil)
+			L.Push(lua.LString(err.Error()))
+			return 2
+		}
+
+		resultTable := L.NewTable()
+		rowIndex := 1
+		for rows.Next() {
+			values := make([]interface{}, len(cols))
+			valuePtrs := make([]interface{}, len(cols))
+			for i := range cols {
+				valuePtrs[i] = &values[i]
+			}
+
+			if err := rows.Scan(valuePtrs...); err != nil {
+				continue
+			}
+
+			rowTable := L.NewTable()
+			for i, col := range cols {
+				val := values[i]
+				if val == nil {
+					rowTable.RawSetString(col, lua.LNil)
+				} else if b, ok := val.([]byte); ok {
+					rowTable.RawSetString(col, lua.LString(string(b)))
+				} else {
+					switch v := val.(type) {
+					case int64:
+						rowTable.RawSetString(col, lua.LNumber(v))
+					case float64:
+						rowTable.RawSetString(col, lua.LNumber(v))
+					case string:
+						rowTable.RawSetString(col, lua.LString(v))
+					case bool:
+						rowTable.RawSetString(col, lua.LBool(v))
+					default:
+						rowTable.RawSetString(col, lua.LString(fmt.Sprintf("%v", v)))
+					}
+				}
+			}
+			resultTable.RawSetInt(rowIndex, rowTable)
+			rowIndex++
+		}
+
+		L.Push(resultTable)
+		L.Push(lua.LNil)
+		return 2
+	}))
+
 	reqTable := L.NewTable()
 	reqTable.RawSetString("method", lua.LString(r.Method))
 	reqTable.RawSetString("uri", lua.LString(r.RequestURI))
@@ -81,7 +146,6 @@ func handleLuaScript(w http.ResponseWriter, r *http.Request, scriptPath string) 
 	reqTable.RawSetString("host", lua.LString(r.Host))
 	reqTable.RawSetString("remote_addr", lua.LString(r.RemoteAddr))
 
-	// Headers table
 	headersTable := L.NewTable()
 	for k, vals := range r.Header {
 		luaVals := L.NewTable()
@@ -92,7 +156,6 @@ func handleLuaScript(w http.ResponseWriter, r *http.Request, scriptPath string) 
 	}
 	reqTable.RawSetString("headers", headersTable)
 
-	// Query parameters table
 	queryTable := L.NewTable()
 	for k, vals := range r.URL.Query() {
 		luaVals := L.NewTable()
@@ -103,7 +166,6 @@ func handleLuaScript(w http.ResponseWriter, r *http.Request, scriptPath string) 
 	}
 	reqTable.RawSetString("query", queryTable)
 
-	// Body content
 	bodyBytes, err := io.ReadAll(r.Body)
 	if err == nil {
 		reqTable.RawSetString("body", lua.LString(string(bodyBytes)))
@@ -401,7 +463,7 @@ func main() {
 
 		if strings.HasSuffix(targetPath, ".lua") {
 			if info, err := os.Stat(targetPath); err == nil && !info.IsDir() {
-				handleLuaScript(w, r, targetPath)
+				handleLuaScript(w, r, targetPath, db)
 				return
 			}
 		}
