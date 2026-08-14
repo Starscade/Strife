@@ -73,7 +73,47 @@ func handleLuaScript(w http.ResponseWriter, r *http.Request, scriptPath string) 
 		return 0
 	}))
 
-	err := L.DoFile(scriptPath)
+	// Pass full Request metadata via a global table 'REQUEST'
+	reqTable := L.NewTable()
+	reqTable.RawSetString("method", lua.LString(r.Method))
+	reqTable.RawSetString("uri", lua.LString(r.RequestURI))
+	reqTable.RawSetString("path", lua.LString(r.URL.Path))
+	reqTable.RawSetString("host", lua.LString(r.Host))
+	reqTable.RawSetString("remote_addr", lua.LString(r.RemoteAddr))
+
+	// Headers table
+	headersTable := L.NewTable()
+	for k, vals := range r.Header {
+		luaVals := L.NewTable()
+		for i, v := range vals {
+			luaVals.RawSetInt(i+1, lua.LString(v))
+		}
+		headersTable.RawSetString(k, luaVals)
+	}
+	reqTable.RawSetString("headers", headersTable)
+
+	// Query parameters table
+	queryTable := L.NewTable()
+	for k, vals := range r.URL.Query() {
+		luaVals := L.NewTable()
+		for i, v := range vals {
+			luaVals.RawSetInt(i+1, lua.LString(v))
+		}
+		queryTable.RawSetString(k, luaVals)
+	}
+	reqTable.RawSetString("query", queryTable)
+
+	// Body content
+	bodyBytes, err := io.ReadAll(r.Body)
+	if err == nil {
+		reqTable.RawSetString("body", lua.LString(string(bodyBytes)))
+	} else {
+		reqTable.RawSetString("body", lua.LString(""))
+	}
+
+	L.SetGlobal("REQUEST", reqTable)
+
+	err = L.DoFile(scriptPath)
 	if err != nil {
 		writeLog("ERROR", "LUA", map[string]string{"error": err.Error(), "path": scriptPath})
 		w.WriteHeader(http.StatusInternalServerError)
