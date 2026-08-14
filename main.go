@@ -457,10 +457,10 @@ func main() {
 		}
 
 		writeLog("INFO", "REQUEST", map[string]interface{}{
-			"ms_elapsed": msElapsed,
 			"host":       requestHost,
 			"ip_address": r.RemoteAddr,
 			"method":     r.Method,
+			"ms_elapsed": msElapsed,
 			"path":       r.URL.Path,
 			"status":     rec.status,
 			"user_agent": r.UserAgent(),
