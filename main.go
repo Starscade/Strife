@@ -6,7 +6,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"html"
 	"io"
 	"net"
 	"net/http"
@@ -25,9 +24,6 @@ import (
 type contextKey string
 
 const cancelKey contextKey = "cancel"
-
-const dirListingTemplateStart = "<!DOCTYPE html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><title>&zwj;</title></head><body><ul>"
-const dirListingTemplateEnd = "</ul></body></html>"
 
 type responseRecorder struct {
 	http.ResponseWriter
@@ -202,6 +198,33 @@ func handleLuaScript(w http.ResponseWriter, r *http.Request, scriptPath string, 
 		return 2
 	}))
 
+	L.SetGlobal("read_dir", L.NewFunction(func(L *lua.LState) int {
+		relPath := L.CheckString(1)
+		targetPath := filepath.Join(hostDir, filepath.FromSlash(relPath))
+		entries, err := os.ReadDir(targetPath)
+		if err != nil {
+			L.Push(lua.LNil)
+			L.Push(lua.LString(err.Error()))
+			return 2
+		}
+
+		resultTable := L.NewTable()
+		for i, entry := range entries {
+			entryTable := L.NewTable()
+			entryTable.RawSetString("name", lua.LString(entry.Name()))
+			entryTable.RawSetString("is_dir", lua.LBool(entry.IsDir()))
+			if info, err := entry.Info(); err == nil {
+				entryTable.RawSetString("size", lua.LNumber(info.Size()))
+				entryTable.RawSetString("mod_time", lua.LNumber(info.ModTime().Unix()))
+			}
+			resultTable.RawSetInt(i+1, entryTable)
+		}
+
+		L.Push(resultTable)
+		L.Push(lua.LNil)
+		return 2
+	}))
+
 	reqTable := L.NewTable()
 	reqTable.RawSetString("method", lua.LString(r.Method))
 	reqTable.RawSetString("uri", lua.LString(r.RequestURI))
@@ -278,11 +301,6 @@ func main() {
 
 	defer db.Close()
 
-	htmlIndex := os.Getenv("STRIFE_INDEX")
-	if htmlIndex == "" {
-		htmlIndex = "index.html"
-	}
-
 	portEnv := os.Getenv("STRIFE_PORT")
 	var port int
 	if portEnv == "" {
@@ -319,6 +337,33 @@ func main() {
 		cleanPath := filepath.FromSlash(r.URL.Path)
 		targetPath := filepath.Join(dir, cleanPath)
 
+		// Handle root request or directory requests where no specific resource is requested
+		isRootOrSlash := r.URL.Path == "/" || strings.HasSuffix(r.URL.Path, "/")
+		if isRootOrSlash {
+			// Check if targetPath points to a directory or if we should check index files
+			checkDir := targetPath
+			if info, err := os.Stat(targetPath); err == nil && !info.IsDir() {
+				// If it's explicitly a file, let standard logic handle it below
+			} else {
+				luaIndex := filepath.Join(checkDir, "index.lua")
+				if infoLua, err := os.Stat(luaIndex); err == nil && !infoLua.IsDir() {
+					handleLuaScript(w, r, luaIndex, db, rootDir, host)
+					return
+				}
+
+				htmlIndexFilePath := filepath.Join(checkDir, "index.html")
+				if infoHtml, err := os.Stat(htmlIndexFilePath); err == nil && !infoHtml.IsDir() {
+					http.ServeFile(w, r, htmlIndexFilePath)
+					return
+				}
+
+				if infoDir, err := os.Stat(checkDir); err == nil && infoDir.IsDir() {
+					w.WriteHeader(http.StatusForbidden)
+					return
+				}
+			}
+		}
+
 		if strings.HasSuffix(targetPath, ".lua") {
 			if info, err := os.Stat(targetPath); err == nil && !info.IsDir() {
 				handleLuaScript(w, r, targetPath, db, rootDir, host)
@@ -334,72 +379,24 @@ func main() {
 
 		if err == nil {
 			if info.IsDir() {
-				indexPath := filepath.Join(targetPath, htmlIndex)
+				luaIndex := filepath.Join(targetPath, "index.lua")
+				if indexInfo, err := os.Stat(luaIndex); err == nil && !indexInfo.IsDir() {
+					handleLuaScript(w, r, luaIndex, db, rootDir, host)
+					return
+				}
+				indexPath := filepath.Join(targetPath, "index.html")
 				if indexInfo, err := os.Stat(indexPath); err == nil && !indexInfo.IsDir() {
 					http.ServeFile(w, r, indexPath)
 					return
 				}
-
-				f, err := os.Open(targetPath)
-				if err != nil {
-					w.WriteHeader(http.StatusNotFound)
-					return
-				}
-				defer f.Close()
-
-				names, err := f.Readdirnames(-1)
-				if err != nil {
-					w.WriteHeader(http.StatusNotFound)
-					return
-				}
-
-				w.Header().Set("Content-Type", "text/html; charset=utf-8")
-				fmt.Fprintf(w, "%s", dirListingTemplateStart)
-				if r.URL.Path != "/" && r.URL.Path != "" {
-					fmt.Fprintf(w, "<li><a href=\"..\">../</a></li>")
-				}
-				for _, name := range names {
-					urlPath := filepath.ToSlash(filepath.Join(r.URL.Path, name))
-					if fi, statErr := os.Stat(filepath.Join(targetPath, name)); statErr == nil && fi.IsDir() {
-						urlPath += "/"
-					}
-					safeName := html.EscapeString(urlPath)
-					fmt.Fprintf(w, "<li><a href=\"%s\">%s</a></li>", safeName, safeName)
-				}
-				fmt.Fprintf(w, "%s", dirListingTemplateEnd)
-				return
-			}
-		} else if strings.HasSuffix(r.URL.Path, "/") {
-			indexPath := filepath.Join(targetPath, htmlIndex)
-			if indexInfo, err := os.Stat(indexPath); err == nil && !indexInfo.IsDir() {
-				http.ServeFile(w, r, indexPath)
+				w.WriteHeader(http.StatusForbidden)
 				return
 			}
 		}
 
 		if info, err := os.Stat(targetPath); err == nil && info.IsDir() {
-			f, err := os.Open(targetPath)
-			if err == nil {
-				names, readdirErr := f.Readdirnames(-1)
-				f.Close()
-				if readdirErr == nil {
-					w.Header().Set("Content-Type", "text/html; charset=utf-8")
-					fmt.Fprintf(w, "%s", dirListingTemplateStart)
-					if r.URL.Path != "/" && r.URL.Path != "" {
-						fmt.Fprintf(w, "<li><a href=\"..\">../</a></li>")
-					}
-					for _, name := range names {
-						urlPath := filepath.ToSlash(filepath.Join(r.URL.Path, name))
-						if fi, statErr := os.Stat(filepath.Join(targetPath, name)); statErr == nil && fi.IsDir() {
-							urlPath += "/"
-						}
-						safeName := html.EscapeString(urlPath)
-						fmt.Fprintf(w, "<li><a href=\"%s\">%s</a></li>", safeName, safeName)
-					}
-					fmt.Fprintf(w, "%s", dirListingTemplateEnd)
-					return
-				}
-			}
+			w.WriteHeader(http.StatusForbidden)
+			return
 		}
 
 		http.FileServer(http.Dir(dir)).ServeHTTP(w, r)
@@ -436,10 +433,9 @@ func main() {
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 
 	writeLog("INFO", "SERVER_START", map[string]interface{}{
-		"db":    dbPath,
-		"index": htmlIndex,
-		"port":  port,
-		"root":  rootDir,
+		"db":   dbPath,
+		"port": port,
+		"root": rootDir,
 	})
 
 	go func() {
