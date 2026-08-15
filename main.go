@@ -79,8 +79,16 @@ func pushLuaBoolResult(L *lua.LState, success bool, err error) int {
 	return 2
 }
 
-func resolveHostPath(rootDir, host, relPath string) string {
-	return filepath.Join(rootDir, host, filepath.FromSlash(relPath))
+func resolveHostPath(rootDir, host, scriptPath, relPath string) string {
+	hostRootDir := filepath.Join(rootDir, host)
+	scriptDir := filepath.Dir(scriptPath)
+
+	// If relPath is absolute from the host root (starts with "/")
+	if strings.HasPrefix(relPath, "/") {
+		return filepath.Join(hostRootDir, filepath.FromSlash(relPath))
+	}
+
+	return filepath.Join(scriptDir, filepath.FromSlash(relPath))
 }
 
 func handleLuaScript(w http.ResponseWriter, r *http.Request, scriptPath string, db *sql.DB, rootDir, host string) {
@@ -172,7 +180,7 @@ func handleLuaScript(w http.ResponseWriter, r *http.Request, scriptPath string, 
 	}))
 
 	L.SetGlobal("read_file", L.NewFunction(func(L *lua.LState) int {
-		targetPath := resolveHostPath(rootDir, host, L.CheckString(1))
+		targetPath := resolveHostPath(rootDir, host, scriptPath, L.CheckString(1))
 		data, err := os.ReadFile(targetPath)
 		if err != nil {
 			return pushLuaError(L, err)
@@ -183,7 +191,7 @@ func handleLuaScript(w http.ResponseWriter, r *http.Request, scriptPath string, 
 	}))
 
 	L.SetGlobal("write_file", L.NewFunction(func(L *lua.LState) int {
-		targetPath := resolveHostPath(rootDir, host, L.CheckString(1))
+		targetPath := resolveHostPath(rootDir, host, scriptPath, L.CheckString(1))
 		content := L.CheckString(2)
 		if err := os.MkdirAll(filepath.Dir(targetPath), 0755); err != nil {
 			return pushLuaBoolResult(L, false, err)
@@ -193,13 +201,13 @@ func handleLuaScript(w http.ResponseWriter, r *http.Request, scriptPath string, 
 	}))
 
 	L.SetGlobal("remove_file", L.NewFunction(func(L *lua.LState) int {
-		targetPath := resolveHostPath(rootDir, host, L.CheckString(1))
+		targetPath := resolveHostPath(rootDir, host, scriptPath, L.CheckString(1))
 		err := os.Remove(targetPath)
 		return pushLuaBoolResult(L, err == nil, err)
 	}))
 
 	L.SetGlobal("read_dir", L.NewFunction(func(L *lua.LState) int {
-		targetPath := resolveHostPath(rootDir, host, L.CheckString(1))
+		targetPath := resolveHostPath(rootDir, host, scriptPath, L.CheckString(1))
 		entries, err := os.ReadDir(targetPath)
 		if err != nil {
 			return pushLuaError(L, err)
