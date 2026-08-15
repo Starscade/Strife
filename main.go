@@ -54,6 +54,35 @@ func writeLog(level, topic string, details interface{}) {
 	}
 }
 
+func getCleanHost(r *http.Request) string {
+	host := r.Host
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		return h
+	}
+	return host
+}
+
+func pushLuaError(L *lua.LState, err error) int {
+	L.Push(lua.LNil)
+	L.Push(lua.LString(err.Error()))
+	return 2
+}
+
+func pushLuaBoolResult(L *lua.LState, success bool, err error) int {
+	if err != nil {
+		L.Push(lua.LBool(false))
+		L.Push(lua.LString(err.Error()))
+	} else {
+		L.Push(lua.LBool(true))
+		L.Push(lua.LNil)
+	}
+	return 2
+}
+
+func resolveHostPath(rootDir, host, relPath string) string {
+	return filepath.Join(rootDir, host, filepath.FromSlash(relPath))
+}
+
 func handleLuaScript(w http.ResponseWriter, r *http.Request, scriptPath string, db *sql.DB, rootDir, host string) {
 	L := lua.NewState()
 	defer L.Close()
@@ -78,32 +107,24 @@ func handleLuaScript(w http.ResponseWriter, r *http.Request, scriptPath string, 
 	}))
 
 	L.SetGlobal("set_header", L.NewFunction(func(L *lua.LState) int {
-		key := L.CheckString(1)
-		val := L.CheckString(2)
-		headers.Set(key, val)
+		headers.Set(L.CheckString(1), L.CheckString(2))
 		return 0
 	}))
 
 	L.SetGlobal("db_query", L.NewFunction(func(L *lua.LState) int {
 		if db == nil {
-			L.Push(lua.LNil)
-			L.Push(lua.LString("Database not initialized!"))
-			return 2
+			return pushLuaError(L, fmt.Errorf("Database not initialized!"))
 		}
 		query := L.CheckString(1)
 		rows, err := db.QueryContext(r.Context(), query)
 		if err != nil {
-			L.Push(lua.LNil)
-			L.Push(lua.LString(err.Error()))
-			return 2
+			return pushLuaError(L, err)
 		}
 		defer rows.Close()
 
 		cols, err := rows.Columns()
 		if err != nil {
-			L.Push(lua.LNil)
-			L.Push(lua.LString(err.Error()))
-			return 2
+			return pushLuaError(L, err)
 		}
 
 		resultTable := L.NewTable()
@@ -124,21 +145,21 @@ func handleLuaScript(w http.ResponseWriter, r *http.Request, scriptPath string, 
 				val := values[i]
 				if val == nil {
 					rowTable.RawSetString(col, lua.LNil)
-				} else if b, ok := val.([]byte); ok {
-					rowTable.RawSetString(col, lua.LString(string(b)))
-				} else {
-					switch v := val.(type) {
-					case int64:
-						rowTable.RawSetString(col, lua.LNumber(v))
-					case float64:
-						rowTable.RawSetString(col, lua.LNumber(v))
-					case string:
-						rowTable.RawSetString(col, lua.LString(v))
-					case bool:
-						rowTable.RawSetString(col, lua.LBool(v))
-					default:
-						rowTable.RawSetString(col, lua.LString(fmt.Sprintf("%v", v)))
-					}
+					continue
+				}
+				switch v := val.(type) {
+				case []byte:
+					rowTable.RawSetString(col, lua.LString(string(v)))
+				case int64:
+					rowTable.RawSetString(col, lua.LNumber(v))
+				case float64:
+					rowTable.RawSetString(col, lua.LNumber(v))
+				case string:
+					rowTable.RawSetString(col, lua.LString(v))
+				case bool:
+					rowTable.RawSetString(col, lua.LBool(v))
+				default:
+					rowTable.RawSetString(col, lua.LString(fmt.Sprintf("%v", v)))
 				}
 			}
 			resultTable.RawSetInt(rowIndex, rowTable)
@@ -150,16 +171,11 @@ func handleLuaScript(w http.ResponseWriter, r *http.Request, scriptPath string, 
 		return 2
 	}))
 
-	hostDir := filepath.Join(rootDir, host)
-
 	L.SetGlobal("read_file", L.NewFunction(func(L *lua.LState) int {
-		relPath := L.CheckString(1)
-		targetPath := filepath.Join(hostDir, filepath.FromSlash(relPath))
+		targetPath := resolveHostPath(rootDir, host, L.CheckString(1))
 		data, err := os.ReadFile(targetPath)
 		if err != nil {
-			L.Push(lua.LNil)
-			L.Push(lua.LString(err.Error()))
-			return 2
+			return pushLuaError(L, err)
 		}
 		L.Push(lua.LString(string(data)))
 		L.Push(lua.LNil)
@@ -167,45 +183,26 @@ func handleLuaScript(w http.ResponseWriter, r *http.Request, scriptPath string, 
 	}))
 
 	L.SetGlobal("write_file", L.NewFunction(func(L *lua.LState) int {
-		relPath := L.CheckString(1)
+		targetPath := resolveHostPath(rootDir, host, L.CheckString(1))
 		content := L.CheckString(2)
-		targetPath := filepath.Join(hostDir, filepath.FromSlash(relPath))
 		if err := os.MkdirAll(filepath.Dir(targetPath), 0755); err != nil {
-			L.Push(lua.LBool(false))
-			L.Push(lua.LString(err.Error()))
-			return 2
+			return pushLuaBoolResult(L, false, err)
 		}
-		if err := os.WriteFile(targetPath, []byte(content), 0644); err != nil {
-			L.Push(lua.LBool(false))
-			L.Push(lua.LString(err.Error()))
-			return 2
-		}
-		L.Push(lua.LBool(true))
-		L.Push(lua.LNil)
-		return 2
+		err := os.WriteFile(targetPath, []byte(content), 0644)
+		return pushLuaBoolResult(L, err == nil, err)
 	}))
 
 	L.SetGlobal("remove_file", L.NewFunction(func(L *lua.LState) int {
-		relPath := L.CheckString(1)
-		targetPath := filepath.Join(hostDir, filepath.FromSlash(relPath))
-		if err := os.Remove(targetPath); err != nil {
-			L.Push(lua.LBool(false))
-			L.Push(lua.LString(err.Error()))
-			return 2
-		}
-		L.Push(lua.LBool(true))
-		L.Push(lua.LNil)
-		return 2
+		targetPath := resolveHostPath(rootDir, host, L.CheckString(1))
+		err := os.Remove(targetPath)
+		return pushLuaBoolResult(L, err == nil, err)
 	}))
 
 	L.SetGlobal("read_dir", L.NewFunction(func(L *lua.LState) int {
-		relPath := L.CheckString(1)
-		targetPath := filepath.Join(hostDir, filepath.FromSlash(relPath))
+		targetPath := resolveHostPath(rootDir, host, L.CheckString(1))
 		entries, err := os.ReadDir(targetPath)
 		if err != nil {
-			L.Push(lua.LNil)
-			L.Push(lua.LString(err.Error()))
-			return 2
+			return pushLuaError(L, err)
 		}
 
 		resultTable := L.NewTable()
@@ -252,17 +249,12 @@ func handleLuaScript(w http.ResponseWriter, r *http.Request, scriptPath string, 
 	}
 	reqTable.RawSetString("query", queryTable)
 
-	bodyBytes, err := io.ReadAll(r.Body)
-	if err == nil {
-		reqTable.RawSetString("body", lua.LString(string(bodyBytes)))
-	} else {
-		reqTable.RawSetString("body", lua.LString(""))
-	}
+	bodyBytes, _ := io.ReadAll(r.Body)
+	reqTable.RawSetString("body", lua.LString(string(bodyBytes)))
 
 	L.SetGlobal("REQUEST", reqTable)
 
-	err = L.DoFile(scriptPath)
-	if err != nil {
+	if err := L.DoFile(scriptPath); err != nil {
 		writeLog("ERROR", "LUA", map[string]string{"error": err.Error(), "path": scriptPath})
 		w.WriteHeader(http.StatusInternalServerError)
 		w.Write([]byte(fmt.Sprintf("Lua error: %v", err)))
@@ -278,6 +270,21 @@ func handleLuaScript(w http.ResponseWriter, r *http.Request, scriptPath string, 
 	w.Write(stdout.Bytes())
 }
 
+func tryServeIndexOrScript(w http.ResponseWriter, r *http.Request, targetPath string, db *sql.DB, rootDir, host string) bool {
+	luaIndex := filepath.Join(targetPath, "index.lua")
+	if info, err := os.Stat(luaIndex); err == nil && !info.IsDir() {
+		handleLuaScript(w, r, luaIndex, db, rootDir, host)
+		return true
+	}
+
+	htmlIndex := filepath.Join(targetPath, "index.html")
+	if info, err := os.Stat(htmlIndex); err == nil && !info.IsDir() {
+		http.ServeFile(w, r, htmlIndex)
+		return true
+	}
+	return false
+}
+
 func main() {
 	dbPath := os.Getenv("STRIFE_DB")
 	if dbPath == "" {
@@ -288,27 +295,19 @@ func main() {
 		}
 	}
 	db, err := sql.Open("sqlite", dbPath)
-	if err != nil {
-		writeLog("ERROR", "DATABASE", map[string]string{"error": err.Error(), "path": dbPath})
+	if err != nil || db.Ping() != nil {
+		if db != nil {
+			db.Close()
+		}
+		writeLog("ERROR", "DATABASE", map[string]string{"path": dbPath})
 		os.Exit(1)
 	}
-
-	if err := db.Ping(); err != nil {
-		writeLog("ERROR", "DATABASE", map[string]string{"error": err.Error(), "path": dbPath})
-		db.Close()
-		os.Exit(1)
-	}
-
 	defer db.Close()
 
-	portEnv := os.Getenv("STRIFE_PORT")
-	var port int
-	if portEnv == "" {
-		port = 8080
-	} else {
-		port, err = strconv.Atoi(portEnv)
-		if err != nil {
-			port = 8080
+	port := 8080
+	if portEnv := os.Getenv("STRIFE_PORT"); portEnv != "" {
+		if p, err := strconv.Atoi(portEnv); err == nil {
+			port = p
 		}
 	}
 
@@ -318,11 +317,7 @@ func main() {
 	}
 
 	mux := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		host := r.Host
-		if h, _, err := net.SplitHostPort(host); err == nil {
-			host = h
-		}
-
+		host := getCleanHost(r)
 		dir := filepath.Join(rootDir, host)
 
 		ctx, cancel := context.WithCancel(r.Context())
@@ -334,30 +329,16 @@ func main() {
 			return
 		}
 
-		cleanPath := filepath.FromSlash(r.URL.Path)
-		targetPath := filepath.Join(dir, cleanPath)
+		targetPath := filepath.Join(dir, filepath.FromSlash(r.URL.Path))
 
-		// Handle root request or directory requests where no specific resource is requested
-		isRootOrSlash := r.URL.Path == "/" || strings.HasSuffix(r.URL.Path, "/")
-		if isRootOrSlash {
-			// Check if targetPath points to a directory or if we should check index files
-			checkDir := targetPath
+		if r.URL.Path == "/" || strings.HasSuffix(r.URL.Path, "/") {
 			if info, err := os.Stat(targetPath); err == nil && !info.IsDir() {
-				// If it's explicitly a file, let standard logic handle it below
+				// Fallthrough to standard file handling below
 			} else {
-				luaIndex := filepath.Join(checkDir, "index.lua")
-				if infoLua, err := os.Stat(luaIndex); err == nil && !infoLua.IsDir() {
-					handleLuaScript(w, r, luaIndex, db, rootDir, host)
+				if tryServeIndexOrScript(w, r, targetPath, db, rootDir, host) {
 					return
 				}
-
-				htmlIndexFilePath := filepath.Join(checkDir, "index.html")
-				if infoHtml, err := os.Stat(htmlIndexFilePath); err == nil && !infoHtml.IsDir() {
-					http.ServeFile(w, r, htmlIndexFilePath)
-					return
-				}
-
-				if infoDir, err := os.Stat(checkDir); err == nil && infoDir.IsDir() {
+				if infoDir, err := os.Stat(targetPath); err == nil && infoDir.IsDir() {
 					w.WriteHeader(http.StatusForbidden)
 					return
 				}
@@ -377,24 +358,10 @@ func main() {
 			return
 		}
 
-		if err == nil {
-			if info.IsDir() {
-				luaIndex := filepath.Join(targetPath, "index.lua")
-				if indexInfo, err := os.Stat(luaIndex); err == nil && !indexInfo.IsDir() {
-					handleLuaScript(w, r, luaIndex, db, rootDir, host)
-					return
-				}
-				indexPath := filepath.Join(targetPath, "index.html")
-				if indexInfo, err := os.Stat(indexPath); err == nil && !indexInfo.IsDir() {
-					http.ServeFile(w, r, indexPath)
-					return
-				}
-				w.WriteHeader(http.StatusForbidden)
+		if err == nil && info.IsDir() {
+			if tryServeIndexOrScript(w, r, targetPath, db, rootDir, host) {
 				return
 			}
-		}
-
-		if info, err := os.Stat(targetPath); err == nil && info.IsDir() {
 			w.WriteHeader(http.StatusForbidden)
 			return
 		}
@@ -406,18 +373,12 @@ func main() {
 		start := time.Now()
 		rec := &responseRecorder{ResponseWriter: w, status: http.StatusOK}
 		mux.ServeHTTP(rec, r)
-		msElapsed := float64(time.Since(start).Microseconds()) / 1000.0
-
-		requestHost := r.Host
-		if h, _, err := net.SplitHostPort(requestHost); err == nil {
-			requestHost = h
-		}
 
 		writeLog("INFO", "REQUEST", map[string]interface{}{
-			"host":       requestHost,
+			"host":       getCleanHost(r),
 			"ip_address": r.RemoteAddr,
 			"method":     r.Method,
-			"ms_elapsed": msElapsed,
+			"ms_elapsed": float64(time.Since(start).Microseconds()) / 1000.0,
 			"path":       r.URL.Path,
 			"status":     rec.status,
 			"user_agent": r.UserAgent(),
@@ -440,25 +401,18 @@ func main() {
 
 	go func() {
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			writeLog("ERROR", "SERVER", map[string]string{
-				"error": err.Error(),
-			})
+			writeLog("ERROR", "SERVER", map[string]string{"error": err.Error()})
 			os.Exit(1)
 		}
 	}()
 
 	sig := <-sigChan
-
-	if db != nil {
-		db.Close()
-	}
+	db.Close()
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	_ = server.Shutdown(shutdownCtx)
 
-	writeLog("INFO", "SERVER", map[string]string{
-		"signal": sig.String(),
-	})
+	writeLog("INFO", "SERVER", map[string]string{"signal": sig.String()})
 	os.Exit(0)
 }
