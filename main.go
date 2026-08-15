@@ -201,13 +201,13 @@ func main() {
 		writeLog("ERROR", "DATABASE", map[string]string{"error": err.Error(), "path": dbPath})
 		os.Exit(1)
 	}
-	
+
 	if err := db.Ping(); err != nil {
 		writeLog("ERROR", "DATABASE", map[string]string{"error": err.Error(), "path": dbPath})
 		db.Close()
 		os.Exit(1)
 	}
-	
+
 	defer db.Close()
 
 	htmlIndex := os.Getenv("STRIFE_INDEX")
