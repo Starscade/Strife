@@ -76,7 +76,7 @@ func handleLuaScript(w http.ResponseWriter, r *http.Request, scriptPath string, 
 	L.SetGlobal("db_query", L.NewFunction(func(L *lua.LState) int {
 		if db == nil {
 			L.Push(lua.LNil)
-			L.Push(lua.LString("database not initialized"))
+			L.Push(lua.LString("Database not initialized!"))
 			return 2
 		}
 		query := L.CheckString(1)
@@ -191,11 +191,24 @@ func main() {
 	dbPath := os.Getenv("STRIFE_DB")
 	if dbPath == "" {
 		dbPath = ":memory:"
+	} else if dbPath != ":memory:" {
+		if err := os.MkdirAll(filepath.Dir(dbPath), 0755); err != nil {
+			writeLog("ERROR", "DATABASE", map[string]string{"error": err.Error(), "path": dbPath})
+		}
 	}
 	db, err := sql.Open("sqlite", dbPath)
-	if err == nil {
-		defer db.Close()
+	if err != nil {
+		writeLog("ERROR", "DATABASE", map[string]string{"error": err.Error(), "path": dbPath})
+		os.Exit(1)
 	}
+	
+	if err := db.Ping(); err != nil {
+		writeLog("ERROR", "DATABASE", map[string]string{"error": err.Error(), "path": dbPath})
+		db.Close()
+		os.Exit(1)
+	}
+	
+	defer db.Close()
 
 	htmlIndex := os.Getenv("STRIFE_INDEX")
 	if htmlIndex == "" {
