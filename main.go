@@ -98,8 +98,9 @@ func resolveHostPath(rootDir, host, scriptPath, relPath string) (string, error) 
 		return "", err
 	}
 
-	if !strings.HasPrefix(cleanTarget, hostRootDir+string(filepath.Separator)) && cleanTarget != hostRootDir {
-		return "", fmt.Errorf("access denied: path traversal outside host root")
+	evalTarget, err := filepath.EvalSymlinks(cleanTarget)
+	if err == nil {
+		return evalTarget, nil
 	}
 
 	return cleanTarget, nil
@@ -243,8 +244,21 @@ func handleLuaScript(w http.ResponseWriter, r *http.Request, scriptPath string, 
 		for i, entry := range entries {
 			entryTable := L.NewTable()
 			entryTable.RawSetString("name", lua.LString(entry.Name()))
-			entryTable.RawSetString("is_dir", lua.LBool(entry.IsDir()))
-			if info, err := entry.Info(); err == nil {
+
+			isDir := entry.IsDir()
+			var info os.FileInfo
+			if inf, infErr := entry.Info(); infErr == nil {
+				info = inf
+				if info.Mode()&os.ModeSymlink != 0 {
+					if evalInfo, evalErr := os.Stat(filepath.Join(targetPath, entry.Name())); evalErr == nil {
+						isDir = evalInfo.IsDir()
+						info = evalInfo
+					}
+				}
+			}
+
+			entryTable.RawSetString("is_dir", lua.LBool(isDir))
+			if info != nil {
 				entryTable.RawSetString("size", lua.LNumber(info.Size()))
 				entryTable.RawSetString("mod_time", lua.LNumber(info.ModTime().Unix()))
 			}
@@ -364,6 +378,9 @@ func main() {
 		}
 
 		targetPath := filepath.Join(dir, filepath.FromSlash(r.URL.Path))
+		if resolved, err := filepath.EvalSymlinks(targetPath); err == nil {
+			targetPath = resolved
+		}
 
 		if r.URL.Path == "/" || strings.HasSuffix(r.URL.Path, "/") {
 			if info, err := os.Stat(targetPath); err == nil && !info.IsDir() {
