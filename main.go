@@ -106,9 +106,28 @@ func resolveHostPath(rootDir, host, scriptPath, relPath string) (string, error) 
 	return cleanTarget, nil
 }
 
+func toHostRelativePath(hostRootDir, fullPath string) (string, error) {
+	rel, err := filepath.Rel(hostRootDir, fullPath)
+	if err != nil {
+		return "", err
+	}
+	if rel == "." {
+		return "/", nil
+	}
+	return "/" + filepath.ToSlash(rel), nil
+}
+
 func handleLuaScript(w http.ResponseWriter, r *http.Request, scriptPath string, db *sql.DB, rootDir, host string) {
 	L := lua.NewState()
 	defer L.Close()
+
+	hostRootDir, err := filepath.Abs(filepath.Join(rootDir, host))
+	if err != nil {
+		writeLog("ERROR", "LUA", map[string]string{"error": err.Error(), "host": host})
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte("Internal server error"))
+		return
+	}
 
 	var stdout bytes.Buffer
 	var statusCode = http.StatusOK
@@ -245,12 +264,20 @@ func handleLuaScript(w http.ResponseWriter, r *http.Request, scriptPath string, 
 			entryTable := L.NewTable()
 			entryTable.RawSetString("name", lua.LString(entry.Name()))
 
+			childFullPath := filepath.Join(targetPath, entry.Name())
+			hostRel, relErr := toHostRelativePath(hostRootDir, childFullPath)
+			if relErr == nil {
+				entryTable.RawSetString("path", lua.LString(hostRel))
+			} else {
+				entryTable.RawSetString("path", lua.LString(""))
+			}
+
 			isDir := entry.IsDir()
 			var info os.FileInfo
 			if inf, infErr := entry.Info(); infErr == nil {
 				info = inf
 				if info.Mode()&os.ModeSymlink != 0 {
-					if evalInfo, evalErr := os.Stat(filepath.Join(targetPath, entry.Name())); evalErr == nil {
+					if evalInfo, evalErr := os.Stat(childFullPath); evalErr == nil {
 						isDir = evalInfo.IsDir()
 						info = evalInfo
 					}
