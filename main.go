@@ -58,11 +58,14 @@ func writeLog(level, topic string, details interface{}) {
 	}
 }
 
-func handleLuaScript(w http.ResponseWriter, r *http.Request, scriptPath string, db *sql.DB) {
+func handleLuaScript(w http.ResponseWriter, r *http.Request, scriptPath string, db *sql.DB, rootDir, host string) {
 	L := lua.NewState()
 	defer L.Close()
 
 	var stdout bytes.Buffer
+	var statusCode = http.StatusOK
+	headers := make(http.Header)
+
 	L.SetGlobal("print", L.NewFunction(func(L *lua.LState) int {
 		top := L.GetTop()
 		var args []string
@@ -70,6 +73,18 @@ func handleLuaScript(w http.ResponseWriter, r *http.Request, scriptPath string, 
 			args = append(args, L.ToString(i))
 		}
 		stdout.WriteString(strings.Join(args, "\t") + "\n")
+		return 0
+	}))
+
+	L.SetGlobal("set_status", L.NewFunction(func(L *lua.LState) int {
+		statusCode = L.CheckInt(1)
+		return 0
+	}))
+
+	L.SetGlobal("set_header", L.NewFunction(func(L *lua.LState) int {
+		key := L.CheckString(1)
+		val := L.CheckString(2)
+		headers.Set(key, val)
 		return 0
 	}))
 
@@ -139,6 +154,54 @@ func handleLuaScript(w http.ResponseWriter, r *http.Request, scriptPath string, 
 		return 2
 	}))
 
+	hostDir := filepath.Join(rootDir, host)
+
+	L.SetGlobal("read_file", L.NewFunction(func(L *lua.LState) int {
+		relPath := L.CheckString(1)
+		targetPath := filepath.Join(hostDir, filepath.FromSlash(relPath))
+		data, err := os.ReadFile(targetPath)
+		if err != nil {
+			L.Push(lua.LNil)
+			L.Push(lua.LString(err.Error()))
+			return 2
+		}
+		L.Push(lua.LString(string(data)))
+		L.Push(lua.LNil)
+		return 2
+	}))
+
+	L.SetGlobal("write_file", L.NewFunction(func(L *lua.LState) int {
+		relPath := L.CheckString(1)
+		content := L.CheckString(2)
+		targetPath := filepath.Join(hostDir, filepath.FromSlash(relPath))
+		if err := os.MkdirAll(filepath.Dir(targetPath), 0755); err != nil {
+			L.Push(lua.LBool(false))
+			L.Push(lua.LString(err.Error()))
+			return 2
+		}
+		if err := os.WriteFile(targetPath, []byte(content), 0644); err != nil {
+			L.Push(lua.LBool(false))
+			L.Push(lua.LString(err.Error()))
+			return 2
+		}
+		L.Push(lua.LBool(true))
+		L.Push(lua.LNil)
+		return 2
+	}))
+
+	L.SetGlobal("remove_file", L.NewFunction(func(L *lua.LState) int {
+		relPath := L.CheckString(1)
+		targetPath := filepath.Join(hostDir, filepath.FromSlash(relPath))
+		if err := os.Remove(targetPath); err != nil {
+			L.Push(lua.LBool(false))
+			L.Push(lua.LString(err.Error()))
+			return 2
+		}
+		L.Push(lua.LBool(true))
+		L.Push(lua.LNil)
+		return 2
+	}))
+
 	reqTable := L.NewTable()
 	reqTable.RawSetString("method", lua.LString(r.Method))
 	reqTable.RawSetString("uri", lua.LString(r.RequestURI))
@@ -183,7 +246,12 @@ func handleLuaScript(w http.ResponseWriter, r *http.Request, scriptPath string, 
 		return
 	}
 
-	w.WriteHeader(http.StatusOK)
+	for k, vals := range headers {
+		for _, v := range vals {
+			w.Header().Add(k, v)
+		}
+	}
+	w.WriteHeader(statusCode)
 	w.Write(stdout.Bytes())
 }
 
@@ -231,11 +299,6 @@ func main() {
 		rootDir = "."
 	}
 
-	defaultTrashDir := os.Getenv("STRIFE_TRASH")
-	if defaultTrashDir == "" {
-		defaultTrashDir = filepath.Join(rootDir, ".Trash")
-	}
-
 	mux := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		host := r.Host
 		if h, _, err := net.SplitHostPort(host); err == nil {
@@ -243,224 +306,6 @@ func main() {
 		}
 
 		dir := filepath.Join(rootDir, host)
-
-		if r.Method == http.MethodDelete {
-			if _, err := os.Stat(dir); os.IsNotExist(err) {
-				writeLog("ERROR", "DELETE", map[string]string{"error": "Directory not found.", "path": dir})
-				w.WriteHeader(http.StatusNotFound)
-				return
-			}
-
-			cleanPath := filepath.FromSlash(r.URL.Path)
-			targetPath := filepath.Join(dir, cleanPath)
-
-			info, err := os.Stat(targetPath)
-			if os.IsNotExist(err) {
-				writeLog("ERROR", "DELETE", map[string]string{"error": "File not found.", "path": targetPath})
-				w.WriteHeader(http.StatusNotFound)
-				return
-			} else if err != nil {
-				writeLog("ERROR", "DELETE", map[string]string{"error": err.Error(), "path": targetPath})
-				w.WriteHeader(http.StatusInternalServerError)
-				return
-			}
-
-			if info.IsDir() {
-				details := map[string]string{"error": "Cannot delete directories.", "path": targetPath}
-				writeLog("ERROR", "DELETE", details)
-				logData := map[string]interface{}{
-					"details":   details,
-					"level":     "ERROR",
-					"timestamp": time.Now().Format(time.RFC3339),
-					"topic":     "DELETE",
-				}
-				w.Header().Set("Content-Type", "application/json")
-				w.WriteHeader(http.StatusBadRequest)
-				json.NewEncoder(w).Encode(logData)
-				return
-			}
-
-			trashDir := filepath.Join(defaultTrashDir, host, cleanPath)
-			if err := os.MkdirAll(filepath.Dir(trashDir), 0755); err != nil {
-				writeLog("ERROR", "DELETE", map[string]string{"error": err.Error(), "path": trashDir})
-				w.WriteHeader(http.StatusInternalServerError)
-				return
-			}
-
-			if err := os.Rename(targetPath, trashDir); err != nil {
-				writeLog("ERROR", "DELETE", map[string]string{"error": err.Error(), "from": targetPath, "to": trashDir})
-				w.WriteHeader(http.StatusInternalServerError)
-				return
-			}
-
-			w.WriteHeader(http.StatusNoContent)
-			return
-		}
-
-		if r.Method == http.MethodPut {
-			if _, err := os.Stat(dir); os.IsNotExist(err) {
-				w.WriteHeader(http.StatusNotFound)
-				return
-			}
-
-			cleanPath := filepath.FromSlash(r.URL.Path)
-			targetPath := filepath.Join(dir, cleanPath)
-
-			parentDir := filepath.Dir(targetPath)
-			if parentInfo, err := os.Stat(parentDir); err != nil || !parentInfo.IsDir() {
-				w.WriteHeader(http.StatusBadRequest)
-				return
-			}
-
-			if _, err := os.Stat(targetPath); err == nil {
-				w.WriteHeader(http.StatusConflict)
-				return
-			}
-
-			outFile, err := os.Create(targetPath)
-			if err != nil {
-				w.WriteHeader(http.StatusInternalServerError)
-				return
-			}
-			defer outFile.Close()
-
-			_, err = io.Copy(outFile, r.Body)
-			if err != nil {
-				w.WriteHeader(http.StatusInternalServerError)
-				return
-			}
-
-			w.WriteHeader(http.StatusCreated)
-			return
-		}
-
-		if r.Method == http.MethodPost && db != nil && !strings.HasSuffix(r.URL.Path, ".lua") && r.Header.Get("Content-Type") == "application/sql" {
-			bodyBytes, err := io.ReadAll(r.Body)
-			if err == nil {
-				query := strings.TrimSpace(string(bodyBytes))
-				if query != "" {
-					acceptHeader := r.Header.Get("Accept")
-					if acceptHeader != "" && !strings.Contains(acceptHeader, "application/json") && !strings.Contains(acceptHeader, "text/csv") && !strings.Contains(acceptHeader, "text/html") && !strings.Contains(acceptHeader, "*/*") {
-						w.WriteHeader(http.StatusNotAcceptable)
-						return
-					}
-
-					rows, err := db.QueryContext(r.Context(), query)
-					if err != nil {
-						if strings.Contains(acceptHeader, "text/html") {
-							w.Header().Set("Content-Type", "text/html; charset=utf-8")
-							w.WriteHeader(http.StatusBadRequest)
-							fmt.Fprintf(w, "<p>error: %s</p>", html.EscapeString(err.Error()))
-							return
-						} else if strings.Contains(acceptHeader, "text/csv") {
-							w.Header().Set("Content-Type", "text/csv; charset=utf-8")
-							w.WriteHeader(http.StatusBadRequest)
-							fmt.Fprintf(w, "error\n%q\n", err.Error())
-							return
-						}
-						w.Header().Set("Content-Type", "application/json")
-						w.WriteHeader(http.StatusBadRequest)
-						json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
-						return
-					}
-					defer rows.Close()
-
-					cols, err := rows.Columns()
-					if err != nil {
-						if strings.Contains(acceptHeader, "text/html") {
-							w.Header().Set("Content-Type", "text/html; charset=utf-8")
-							w.WriteHeader(http.StatusInternalServerError)
-							fmt.Fprintf(w, "<p>error: %s</p>", html.EscapeString(err.Error()))
-							return
-						} else if strings.Contains(acceptHeader, "text/csv") {
-							w.Header().Set("Content-Type", "text/csv; charset=utf-8")
-							w.WriteHeader(http.StatusInternalServerError)
-							fmt.Fprintf(w, "error\n%q\n", err.Error())
-							return
-						}
-						w.Header().Set("Content-Type", "application/json")
-						w.WriteHeader(http.StatusInternalServerError)
-						json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
-						return
-					}
-
-					results := []map[string]interface{}{}
-					for rows.Next() {
-						values := make([]interface{}, len(cols))
-						valuePtrs := make([]interface{}, len(cols))
-						for i := range cols {
-							valuePtrs[i] = &values[i]
-						}
-
-						if err := rows.Scan(valuePtrs...); err != nil {
-							continue
-						}
-
-						rowMap := make(map[string]interface{})
-						for i, col := range cols {
-							val := values[i]
-							if b, ok := val.([]byte); ok {
-								rowMap[col] = string(b)
-							} else {
-								rowMap[col] = val
-							}
-						}
-						results = append(results, rowMap)
-					}
-
-					if len(results) == 0 {
-						w.WriteHeader(http.StatusNoContent)
-						return
-					}
-
-					if strings.Contains(acceptHeader, "text/html") {
-						w.Header().Set("Content-Type", "text/html; charset=utf-8")
-						w.WriteHeader(http.StatusOK)
-						fmt.Fprintf(w, "<table><tr>")
-						for _, col := range cols {
-							fmt.Fprintf(w, "<th>%s</th>", html.EscapeString(col))
-						}
-						fmt.Fprintf(w, "</tr>")
-						for _, row := range results {
-							fmt.Fprintf(w, "<tr>")
-							for _, col := range cols {
-								valStr := ""
-								if v := row[col]; v != nil {
-									valStr = fmt.Sprintf("%v", v)
-								}
-								fmt.Fprintf(w, "<td>%s</td>", html.EscapeString(valStr))
-							}
-							fmt.Fprintf(w, "</tr>")
-						}
-						fmt.Fprintf(w, "</table>")
-						return
-					} else if strings.Contains(acceptHeader, "text/csv") {
-						w.Header().Set("Content-Type", "text/csv; charset=utf-8")
-						w.WriteHeader(http.StatusOK)
-						fmt.Fprintf(w, "%s\n", strings.Join(cols, ","))
-						for _, row := range results {
-							vals := make([]string, len(cols))
-							for i, col := range cols {
-								valStr := ""
-								if v := row[col]; v != nil {
-									valStr = fmt.Sprintf("%v", v)
-								}
-								if strings.Contains(valStr, ",") || strings.Contains(valStr, "\"") || strings.Contains(valStr, "\n") {
-									valStr = "\"" + strings.ReplaceAll(valStr, "\"", "\"\"") + "\""
-								}
-								vals[i] = valStr
-							}
-							fmt.Fprintf(w, "%s\n", strings.Join(vals, ","))
-						}
-						return
-					}
-
-					w.Header().Set("Content-Type", "application/json")
-					json.NewEncoder(w).Encode(results)
-					return
-				}
-			}
-		}
 
 		ctx, cancel := context.WithCancel(r.Context())
 		defer cancel()
@@ -476,7 +321,7 @@ func main() {
 
 		if strings.HasSuffix(targetPath, ".lua") {
 			if info, err := os.Stat(targetPath); err == nil && !info.IsDir() {
-				handleLuaScript(w, r, targetPath, db)
+				handleLuaScript(w, r, targetPath, db, rootDir, host)
 				return
 			}
 		}
@@ -591,11 +436,10 @@ func main() {
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 
 	writeLog("INFO", "SERVER_START", map[string]interface{}{
-		"db":      dbPath,
-		"garbage": defaultTrashDir,
-		"index":   htmlIndex,
-		"port":    port,
-		"root":    rootDir,
+		"db":    dbPath,
+		"index": htmlIndex,
+		"port":  port,
+		"root":  rootDir,
 	})
 
 	go func() {
