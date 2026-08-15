@@ -432,7 +432,7 @@ func main() {
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 
-	writeLog("INFO", "SERVER_START", map[string]interface{}{
+	writeLog("INFO", "SERVER", map[string]interface{}{
 		"db":   dbPath,
 		"port": port,
 		"root": rootDir,
@@ -440,7 +440,7 @@ func main() {
 
 	go func() {
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			writeLog("ERROR", "SERVER_STOP", map[string]string{
+			writeLog("ERROR", "SERVER", map[string]string{
 				"error": err.Error(),
 			})
 			os.Exit(1)
@@ -457,7 +457,7 @@ func main() {
 	defer cancel()
 	_ = server.Shutdown(shutdownCtx)
 
-	writeLog("INFO", "SERVER_STOP", map[string]string{
+	writeLog("INFO", "SERVER", map[string]string{
 		"signal": sig.String(),
 	})
 	os.Exit(0)
