@@ -458,11 +458,12 @@ func main() {
 	}()
 
 	sig := <-sigChan
-	db.Close()
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	_ = server.Shutdown(shutdownCtx)
+
+	db.Close()
 
 	writeLog("INFO", "SERVER", map[string]string{"signal": sig.String()})
 	os.Exit(0)
