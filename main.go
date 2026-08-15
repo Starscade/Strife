@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"strconv"
@@ -305,6 +306,54 @@ func handleLuaScript(w http.ResponseWriter, r *http.Request, scriptPath string, 
 	}))
 
 	strifeTable.RawSetString("file", fileTable)
+
+	osTable := L.NewTable()
+	osTable.RawSetString("exec", L.NewFunction(func(L *lua.LState) int {
+		name := L.CheckString(1)
+		var args []string
+
+		if L.GetTop() >= 2 {
+			if tbl, ok := L.Get(2).(*lua.LTable); ok {
+				tbl.ForEach(func(k, v lua.LValue) {
+					args = append(args, v.String())
+				})
+			}
+		}
+
+		cmd := exec.CommandContext(r.Context(), name, args...)
+		var outbuf, errbuf bytes.Buffer
+		cmd.Stdout = &outbuf
+		cmd.Stderr = &errbuf
+
+		err := cmd.Run()
+
+		resTable := L.NewTable()
+		resTable.RawSetString("stdout", lua.LString(outbuf.String()))
+		resTable.RawSetString("stderr", lua.LString(errbuf.String()))
+
+		exitCode := 0
+		if err != nil {
+			if exitError, ok := err.(*exec.ExitError); ok {
+				if status, ok := exitError.Sys().(syscall.WaitStatus); ok {
+					exitCode = status.ExitStatus()
+				} else {
+					exitCode = 1
+				}
+			} else {
+				exitCode = 1
+			}
+			resTable.RawSetString("code", lua.LNumber(exitCode))
+			L.Push(resTable)
+			L.Push(lua.LString(err.Error()))
+			return 2
+		}
+
+		resTable.RawSetString("code", lua.LNumber(0))
+		L.Push(resTable)
+		L.Push(lua.LNil)
+		return 2
+	}))
+	strifeTable.RawSetString("os", osTable)
 
 	reqTable := L.NewTable()
 	reqTable.RawSetString("method", lua.LString(r.Method))
