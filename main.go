@@ -143,19 +143,21 @@ func handleLuaScript(w http.ResponseWriter, r *http.Request, scriptPath string, 
 		return 0
 	}))
 
-	L.SetGlobal("set_status", L.NewFunction(func(L *lua.LState) int {
+	strifeTable := L.NewTable()
+
+	responseTable := L.NewTable()
+	responseTable.RawSetString("status", L.NewFunction(func(L *lua.LState) int {
 		statusCode = L.CheckInt(1)
 		return 0
 	}))
-
-	L.SetGlobal("set_header", L.NewFunction(func(L *lua.LState) int {
+	responseTable.RawSetString("header", L.NewFunction(func(L *lua.LState) int {
 		headers.Set(L.CheckString(1), L.CheckString(2))
 		return 0
 	}))
+	strifeTable.RawSetString("response", responseTable)
 
-	strifeTable := L.NewTable()
-
-	strifeTable.RawSetString("db_query", L.NewFunction(func(L *lua.LState) int {
+	dbTable := L.NewTable()
+	dbTable.RawSetString("query", L.NewFunction(func(L *lua.LState) int {
 		if db == nil {
 			return pushLuaError(L, fmt.Errorf("Database not initialized!"))
 		}
@@ -214,8 +216,11 @@ func handleLuaScript(w http.ResponseWriter, r *http.Request, scriptPath string, 
 		L.Push(lua.LNil)
 		return 2
 	}))
+	strifeTable.RawSetString("db", dbTable)
 
-	strifeTable.RawSetString("read_file", L.NewFunction(func(L *lua.LState) int {
+	fileTable := L.NewTable()
+
+	fileTable.RawSetString("read", L.NewFunction(func(L *lua.LState) int {
 		targetPath, err := resolveHostPath(rootDir, host, scriptPath, L.CheckString(1))
 		if err != nil {
 			return pushLuaError(L, err)
@@ -229,7 +234,7 @@ func handleLuaScript(w http.ResponseWriter, r *http.Request, scriptPath string, 
 		return 2
 	}))
 
-	strifeTable.RawSetString("write_file", L.NewFunction(func(L *lua.LState) int {
+	fileTable.RawSetString("write", L.NewFunction(func(L *lua.LState) int {
 		targetPath, err := resolveHostPath(rootDir, host, scriptPath, L.CheckString(1))
 		if err != nil {
 			return pushLuaBoolResult(L, false, err)
@@ -242,7 +247,7 @@ func handleLuaScript(w http.ResponseWriter, r *http.Request, scriptPath string, 
 		return pushLuaBoolResult(L, err == nil, err)
 	}))
 
-	strifeTable.RawSetString("remove_file", L.NewFunction(func(L *lua.LState) int {
+	fileTable.RawSetString("remove", L.NewFunction(func(L *lua.LState) int {
 		targetPath, err := resolveHostPath(rootDir, host, scriptPath, L.CheckString(1))
 		if err != nil {
 			return pushLuaBoolResult(L, false, err)
@@ -251,7 +256,7 @@ func handleLuaScript(w http.ResponseWriter, r *http.Request, scriptPath string, 
 		return pushLuaBoolResult(L, err == nil, err)
 	}))
 
-	strifeTable.RawSetString("read_dir", L.NewFunction(func(L *lua.LState) int {
+	fileTable.RawSetString("read_dir", L.NewFunction(func(L *lua.LState) int {
 		targetPath, err := resolveHostPath(rootDir, host, scriptPath, L.CheckString(1))
 		if err != nil {
 			return pushLuaError(L, err)
@@ -298,6 +303,8 @@ func handleLuaScript(w http.ResponseWriter, r *http.Request, scriptPath string, 
 		L.Push(lua.LNil)
 		return 2
 	}))
+
+	strifeTable.RawSetString("file", fileTable)
 
 	reqTable := L.NewTable()
 	reqTable.RawSetString("method", lua.LString(r.Method))
