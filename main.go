@@ -153,7 +153,9 @@ func handleLuaScript(w http.ResponseWriter, r *http.Request, scriptPath string, 
 		return 0
 	}))
 
-	L.SetGlobal("db_query", L.NewFunction(func(L *lua.LState) int {
+	strifeTable := L.NewTable()
+
+	strifeTable.RawSetString("db_query", L.NewFunction(func(L *lua.LState) int {
 		if db == nil {
 			return pushLuaError(L, fmt.Errorf("Database not initialized!"))
 		}
@@ -213,7 +215,7 @@ func handleLuaScript(w http.ResponseWriter, r *http.Request, scriptPath string, 
 		return 2
 	}))
 
-	L.SetGlobal("read_file", L.NewFunction(func(L *lua.LState) int {
+	strifeTable.RawSetString("read_file", L.NewFunction(func(L *lua.LState) int {
 		targetPath, err := resolveHostPath(rootDir, host, scriptPath, L.CheckString(1))
 		if err != nil {
 			return pushLuaError(L, err)
@@ -227,7 +229,7 @@ func handleLuaScript(w http.ResponseWriter, r *http.Request, scriptPath string, 
 		return 2
 	}))
 
-	L.SetGlobal("write_file", L.NewFunction(func(L *lua.LState) int {
+	strifeTable.RawSetString("write_file", L.NewFunction(func(L *lua.LState) int {
 		targetPath, err := resolveHostPath(rootDir, host, scriptPath, L.CheckString(1))
 		if err != nil {
 			return pushLuaBoolResult(L, false, err)
@@ -240,7 +242,7 @@ func handleLuaScript(w http.ResponseWriter, r *http.Request, scriptPath string, 
 		return pushLuaBoolResult(L, err == nil, err)
 	}))
 
-	L.SetGlobal("remove_file", L.NewFunction(func(L *lua.LState) int {
+	strifeTable.RawSetString("remove_file", L.NewFunction(func(L *lua.LState) int {
 		targetPath, err := resolveHostPath(rootDir, host, scriptPath, L.CheckString(1))
 		if err != nil {
 			return pushLuaBoolResult(L, false, err)
@@ -249,7 +251,7 @@ func handleLuaScript(w http.ResponseWriter, r *http.Request, scriptPath string, 
 		return pushLuaBoolResult(L, err == nil, err)
 	}))
 
-	L.SetGlobal("read_dir", L.NewFunction(func(L *lua.LState) int {
+	strifeTable.RawSetString("read_dir", L.NewFunction(func(L *lua.LState) int {
 		targetPath, err := resolveHostPath(rootDir, host, scriptPath, L.CheckString(1))
 		if err != nil {
 			return pushLuaError(L, err)
@@ -327,7 +329,8 @@ func handleLuaScript(w http.ResponseWriter, r *http.Request, scriptPath string, 
 	bodyBytes, _ := io.ReadAll(r.Body)
 	reqTable.RawSetString("body", lua.LString(string(bodyBytes)))
 
-	L.SetGlobal("REQUEST", reqTable)
+	strifeTable.RawSetString("request", reqTable)
+	L.SetGlobal("strife", strifeTable)
 
 	if err := L.DoFile(scriptPath); err != nil {
 		writeLog("ERROR", "LUA", map[string]string{"error": err.Error(), "path": scriptPath})
