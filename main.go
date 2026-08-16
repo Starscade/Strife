@@ -420,23 +420,27 @@ func tryServeIndexOrScript(w http.ResponseWriter, r *http.Request, targetPath st
 }
 
 func main() {
-	dbPath := os.Getenv("STRIFE_DB")
-	if dbPath == "" {
-		dbPath = ":memory:"
-	} else if dbPath != ":memory:" {
-		if err := os.MkdirAll(filepath.Dir(dbPath), 0755); err != nil {
-			writeLog("ERROR", "DATABASE", map[string]string{"error": err.Error(), "path": dbPath})
-		}
-	}
-	db, err := sql.Open("sqlite", dbPath)
+	db, err := sql.Open("sqlite", ":memory:")
 	if err != nil || db.Ping() != nil {
 		if db != nil {
 			db.Close()
 		}
-		writeLog("ERROR", "DATABASE", map[string]string{"path": dbPath})
+		writeLog("ERROR", "DATABASE", map[string]string{"path": ":memory:"})
 		os.Exit(1)
 	}
 	defer db.Close()
+
+	initSQLPath := os.Getenv("STRIFE_SQL")
+	if initSQLPath != "" {
+		sqlBytes, err := os.ReadFile(initSQLPath)
+		if err != nil {
+			writeLog("ERROR", "DATABASE", map[string]string{"error": err.Error(), "path": initSQLPath})
+		} else {
+			if _, err := db.Exec(string(sqlBytes)); err != nil {
+				writeLog("ERROR", "DATABASE", map[string]string{"error": err.Error(), "path": initSQLPath})
+			}
+		}
+	}
 
 	port := 8080
 	if portEnv := os.Getenv("STRIFE_PORT"); portEnv != "" {
@@ -531,9 +535,9 @@ func main() {
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 
 	writeLog("INFO", "SERVER", map[string]interface{}{
-		"db":   dbPath,
 		"port": port,
 		"root": rootDir,
+		"sql":  initSQLPath,
 	})
 
 	go func() {
