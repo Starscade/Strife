@@ -337,7 +337,7 @@ func handleLuaScript(w http.ResponseWriter, r *http.Request, scriptPath string, 
 		return pushLuaBoolResult(L, err == nil, err)
 	}))
 
-	fileTable.RawSetString("read_dir", L.NewFunction(func(L *lua.LState) int {
+	fileTable.RawSetString("list", L.NewFunction(func(L *lua.LState) int {
 		targetPath, err := resolveHostPath(rootDir, host, scriptPath, L.CheckString(1))
 		if err != nil {
 			return pushLuaError(L, err)
