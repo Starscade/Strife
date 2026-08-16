@@ -125,6 +125,79 @@ func toHostRelativePath(hostRootDir, fullPath string) (string, error) {
 	return "/" + filepath.ToSlash(rel), nil
 }
 
+func goValueToLua(L *lua.LState, val interface{}) lua.LValue {
+	if val == nil {
+		return lua.LNil
+	}
+	switch v := val.(type) {
+	case bool:
+		return lua.LBool(v)
+	case float64:
+		return lua.LNumber(v)
+	case string:
+		return lua.LString(v)
+	case map[string]interface{}:
+		tbl := L.NewTable()
+		for mk, mv := range v {
+			tbl.RawSetString(mk, goValueToLua(L, mv))
+		}
+		return tbl
+	case []interface{}:
+		tbl := L.NewTable()
+		for i, iv := range v {
+			tbl.RawSetInt(i+1, goValueToLua(L, iv))
+		}
+		return tbl
+	default:
+		return lua.LString(string([]byte{}))
+	}
+}
+
+func luaValueToGo(val lua.LValue) interface{} {
+	switch v := val.(type) {
+	case *lua.LNilType:
+		return nil
+	case lua.LBool:
+		return bool(v)
+	case lua.LNumber:
+		return float64(v)
+	case lua.LString:
+		return string(v)
+	case *lua.LTable:
+		isMap := false
+		maxInt := 0
+		count := 0
+
+		v.ForEach(func(k, _ lua.LValue) {
+			count++
+			if ki, ok := k.(lua.LNumber); ok {
+				i := int(ki)
+				if i > maxInt {
+					maxInt = i
+				}
+			} else {
+				isMap = true
+			}
+		})
+
+		if isMap || maxInt != count {
+			m := make(map[string]interface{})
+			v.ForEach(func(k, val lua.LValue) {
+				m[k.String()] = luaValueToGo(val)
+			})
+			return m
+		} else {
+			slice := make([]interface{}, maxInt)
+			for i := 1; i <= maxInt; i++ {
+				slice[i-1] = luaValueToGo(v.RawGetInt(i))
+			}
+			return slice
+		}
+	default:
+		return v.String()
+	}
+}
+
 func handleLuaScript(w http.ResponseWriter, r *http.Request, scriptPath string, db *sql.DB, rootDir, host string) {
 	L := lua.NewState()
 	defer L.Close()
@@ -313,6 +386,34 @@ func handleLuaScript(w http.ResponseWriter, r *http.Request, scriptPath string, 
 	}))
 
 	strifeTable.RawSetString("file", fileTable)
+
+	jsonTable := L.NewTable()
+	jsonTable.RawSetString("encode", L.NewFunction(func(L *lua.LState) int {
+		val := L.Get(1)
+		goVal := luaValueToGo(val)
+		bytes, err := json.Marshal(goVal)
+		if err != nil {
+			L.Push(lua.LNil)
+			L.Push(lua.LString(err.Error()))
+			return 2
+		}
+		L.Push(lua.LString(string(bytes)))
+		L.Push(lua.LNil)
+		return 2
+	}))
+	jsonTable.RawSetString("decode", L.NewFunction(func(L *lua.LState) int {
+		str := L.CheckString(1)
+		var goVal interface{}
+		if err := json.Unmarshal([]byte(str), &goVal); err != nil {
+			L.Push(lua.LNil)
+			L.Push(lua.LString(err.Error()))
+			return 2
+		}
+		L.Push(goValueToLua(L, goVal))
+		L.Push(lua.LNil)
+		return 2
+	}))
+	strifeTable.RawSetString("json", jsonTable)
 
 	osTable := L.NewTable()
 	osTable.RawSetString("exec", L.NewFunction(func(L *lua.LState) int {
