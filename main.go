@@ -427,72 +427,43 @@ func tryServeIndexOrScript(w http.ResponseWriter, r *http.Request, targetPath st
 }
 
 func loadOrGenerateCA(rootDir string) (*x509.Certificate, *rsa.PrivateKey, error) {
-	keyPath := os.Getenv("STRIFE_TLS")
 	certPath := filepath.Join(rootDir, "Strife.crt")
 	privKeyPath := filepath.Join(rootDir, "Strife.key")
 
 	var priv *rsa.PrivateKey
 	var err error
 
-	// 1. If explicit STRIFE_TLS key path is provided, use it
-	if keyPath != "" {
-		keyPEM, err := os.ReadFile(keyPath)
-		if err != nil {
-			writeLog("ERROR", "TLS", map[string]string{"error": err.Error(), "msg": "Failed to read STRIFE_TLS key path"})
-			return nil, nil, fmt.Errorf("Failed to read STRIFE_TLS key path: %w", err)
-		}
-		blockKey, _ := pem.Decode(keyPEM)
-		if blockKey == nil {
-			writeLog("ERROR", "TLS", map[string]string{"msg": "Failed to decode PEM block from STRIFE_TLS key!"})
-			return nil, nil, fmt.Errorf("Failed to decode PEM block from STRIFE_TLS key!")
-		}
-		priv, err = x509.ParsePKCS1PrivateKey(blockKey.Bytes)
-		if err != nil {
-			parsedKey, parseErr := x509.ParsePKCS8PrivateKey(blockKey.Bytes)
-			if parseErr != nil {
-				writeLog("ERROR", "TLS", map[string]string{"error": err.Error(), "msg": "Failed to parse private key from STRIFE_TLS"})
-				return nil, nil, fmt.Errorf("Failed to parse private key from STRIFE_TLS: %w", err)
-			}
-			rsaKey, ok := parsedKey.(*rsa.PrivateKey)
-			if !ok {
-				writeLog("ERROR", "TLS", map[string]string{"msg": "STRIFE_TLS key is not an RSA private key!"})
-				return nil, nil, fmt.Errorf("STRIFE_TLS key is not an RSA private key!")
-			}
-			priv = rsaKey
-		}
-	} else {
-		// Check if we already persisted a CA private key locally
-		if _, err := os.Stat(privKeyPath); err == nil {
-			if keyPEM, err := os.ReadFile(privKeyPath); err == nil {
-				if blockKey, _ := pem.Decode(keyPEM); blockKey != nil {
-					if p, err := x509.ParsePKCS1PrivateKey(blockKey.Bytes); err == nil {
-						priv = p
-					} else if parsedKey, parseErr := x509.ParsePKCS8PrivateKey(blockKey.Bytes); parseErr == nil {
-						if rsaKey, ok := parsedKey.(*rsa.PrivateKey); ok {
-							priv = rsaKey
-						}
+	// Check if we already persisted a CA private key locally in rootDir
+	if _, err := os.Stat(privKeyPath); err == nil {
+		if keyPEM, err := os.ReadFile(privKeyPath); err == nil {
+			if blockKey, _ := pem.Decode(keyPEM); blockKey != nil {
+				if p, err := x509.ParsePKCS1PrivateKey(blockKey.Bytes); err == nil {
+					priv = p
+				} else if parsedKey, parseErr := x509.ParsePKCS8PrivateKey(blockKey.Bytes); parseErr == nil {
+					if rsaKey, ok := parsedKey.(*rsa.PrivateKey); ok {
+						priv = rsaKey
 					}
 				}
 			}
 		}
+	}
 
-		// If no private key found, generate a new one
-		if priv == nil {
-			priv, err = rsa.GenerateKey(rand.Reader, 2048)
-			if err != nil {
-				writeLog("ERROR", "TLS", map[string]string{"error": err.Error(), "msg": "Failed to generate RSA key"})
-				return nil, nil, err
-			}
-			// Save it locally so it remains consistent across restarts
-			privFile, err := os.Create(privKeyPath)
-			if err == nil {
-				pem.Encode(privFile, &pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(priv)})
-				privFile.Close()
-			}
+	// If no private key found, generate a new one
+	if priv == nil {
+		priv, err = rsa.GenerateKey(rand.Reader, 2048)
+		if err != nil {
+			writeLog("ERROR", "TLS", map[string]string{"error": err.Error(), "msg": "Failed to generate RSA key"})
+			return nil, nil, err
+		}
+		// Save it locally in rootDir so it remains consistent across restarts
+		privFile, err := os.Create(privKeyPath)
+		if err == nil {
+			pem.Encode(privFile, &pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(priv)})
+			privFile.Close()
 		}
 	}
 
-	// 2. Try loading existing certificate if present
+	// Try loading existing certificate if present in rootDir
 	if _, err := os.Stat(certPath); err == nil {
 		if certPEM, err := os.ReadFile(certPath); err == nil {
 			if blockCert, _ := pem.Decode(certPEM); blockCert != nil {
@@ -503,7 +474,7 @@ func loadOrGenerateCA(rootDir string) (*x509.Certificate, *rsa.PrivateKey, error
 		}
 	}
 
-	// 3. Otherwise, create a new CA certificate signed with `priv`
+	// Otherwise, create a new CA certificate signed with `priv`
 	serialNumberLimit := new(big.Int).Lsh(big.NewInt(1), 128)
 	serialNumber, err := rand.Int(rand.Reader, serialNumberLimit)
 	if err != nil {
@@ -707,51 +678,54 @@ func main() {
 		Handler: handler,
 	}
 
-	caCert, caKey, err := loadOrGenerateCA(rootDir)
-	if err != nil {
-		writeLog("ERROR", "SERVER", map[string]string{"error": err.Error(), "msg": "Failed to initialize root CA!"})
-		os.Exit(1)
-	}
-
-	certsMap := make(map[string]*tls.Certificate)
-	entries, err := os.ReadDir(rootDir)
-	if err == nil {
-		for _, entry := range entries {
-			if entry.IsDir() {
-				hostName := entry.Name()
-				hostCert, err := generateHostCert(rootDir, hostName, caCert, caKey)
-				if err == nil {
-					certsMap[hostName] = &hostCert
-				}
-			}
+	useTLS := (port == 443)
+	if useTLS {
+		caCert, caKey, err := loadOrGenerateCA(rootDir)
+		if err != nil {
+			writeLog("ERROR", "SERVER", map[string]string{"error": err.Error(), "msg": "Failed to initialize root CA!"})
+			os.Exit(1)
 		}
-	}
 
-	server.TLSConfig = &tls.Config{
-		GetCertificate: func(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
-			serverName := hello.ServerName
-			if serverName == "" {
-				if hello.Conn != nil && hello.Conn.LocalAddr() != nil {
-					if host, _, err := net.SplitHostPort(hello.Conn.LocalAddr().String()); err == nil {
-						serverName = host
+		certsMap := make(map[string]*tls.Certificate)
+		entries, err := os.ReadDir(rootDir)
+		if err == nil {
+			for _, entry := range entries {
+				if entry.IsDir() {
+					hostName := entry.Name()
+					hostCert, err := generateHostCert(rootDir, hostName, caCert, caKey)
+					if err == nil {
+						certsMap[hostName] = &hostCert
 					}
 				}
 			}
-			if cert, ok := certsMap[serverName]; ok {
-				return cert, nil
-			}
-			if h, _, err := net.SplitHostPort(serverName); err == nil {
-				if cert, ok := certsMap[h]; ok {
+		}
+
+		server.TLSConfig = &tls.Config{
+			GetCertificate: func(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
+				serverName := hello.ServerName
+				if serverName == "" {
+					if hello.Conn != nil && hello.Conn.LocalAddr() != nil {
+						if host, _, err := net.SplitHostPort(hello.Conn.LocalAddr().String()); err == nil {
+							serverName = host
+						}
+					}
+				}
+				if cert, ok := certsMap[serverName]; ok {
 					return cert, nil
 				}
-			}
-			for _, cert := range certsMap {
-				return cert, nil
-			}
-			certErr := fmt.Errorf("no certificate available for host: %s", serverName)
-			writeLog("ERROR", "TLS", map[string]string{"error": certErr.Error(), "server_name": serverName})
-			return nil, certErr
-		},
+				if h, _, err := net.SplitHostPort(serverName); err == nil {
+					if cert, ok := certsMap[h]; ok {
+						return cert, nil
+					}
+				}
+				for _, cert := range certsMap {
+					return cert, nil
+				}
+				certErr := fmt.Errorf("no certificate available for host: %s", serverName)
+				writeLog("ERROR", "TLS", map[string]string{"error": certErr.Error(), "server_name": serverName})
+				return nil, certErr
+			},
+		}
 	}
 
 	sigChan := make(chan os.Signal, 1)
@@ -761,11 +735,17 @@ func main() {
 		"port": port,
 		"root": rootDir,
 		"sql":  initSQLPath,
-		"tls":  os.Getenv("STRIFE_TLS"),
+		"tls":  useTLS,
 	})
 
 	go func() {
-		if err := server.ListenAndServeTLS("", ""); err != nil && err != http.ErrServerClosed {
+		var err error
+		if useTLS {
+			err = server.ListenAndServeTLS("", "")
+		} else {
+			err = server.ListenAndServe()
+		}
+		if err != nil && err != http.ErrServerClosed {
 			writeLog("ERROR", "SERVER", map[string]string{"error": err.Error()})
 			os.Exit(1)
 		}
