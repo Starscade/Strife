@@ -320,20 +320,60 @@ func handleLuaScript(w http.ResponseWriter, r *http.Request, scriptPath string, 
 		if err != nil {
 			return pushLuaBoolResult(L, false, err)
 		}
-		content := L.CheckString(2)
-		if err := os.MkdirAll(filepath.Dir(targetPath), 0755); err != nil {
+
+		// Ensure parent directory exists and is a directory; do not create if missing
+		parentDir := filepath.Dir(targetPath)
+		parentInfo, err := os.Stat(parentDir)
+		if err != nil {
+			if os.IsNotExist(err) {
+				return pushLuaBoolResult(L, false, fmt.Errorf("parent directory does not exist: %s", parentDir))
+			}
 			return pushLuaBoolResult(L, false, err)
 		}
+		if !parentInfo.IsDir() {
+			return pushLuaBoolResult(L, false, fmt.Errorf("parent path is not a directory: %s", parentDir))
+		}
+
+		// Prevent overwriting an existing directory
+		if info, err := os.Stat(targetPath); err == nil && info.IsDir() {
+			return pushLuaBoolResult(L, false, fmt.Errorf("cannot overwrite directory with file: %s", targetPath))
+		}
+
+		content := L.CheckString(2)
 		err = os.WriteFile(targetPath, []byte(content), 0644)
 		return pushLuaBoolResult(L, err == nil, err)
 	}))
 
-	fileTable.RawSetString("remove", L.NewFunction(func(L *lua.LState) int {
-		targetPath, err := resolveHostPath(rootDir, host, scriptPath, L.CheckString(1))
+	fileTable.RawSetString("move", L.NewFunction(func(L *lua.LState) int {
+		sourcePath, err := resolveHostPath(rootDir, host, scriptPath, L.CheckString(1))
 		if err != nil {
 			return pushLuaBoolResult(L, false, err)
 		}
-		err = os.Remove(targetPath)
+
+		destinationPath, err := resolveHostPath(rootDir, host, scriptPath, L.CheckString(2))
+		if err != nil {
+			return pushLuaBoolResult(L, false, err)
+		}
+
+		// Ensure destination parent directory exists and is a directory; do not create if missing
+		destParentDir := filepath.Dir(destinationPath)
+		parentInfo, err := os.Stat(destParentDir)
+		if err != nil {
+			if os.IsNotExist(err) {
+				return pushLuaBoolResult(L, false, fmt.Errorf("destination parent directory does not exist: %s", destParentDir))
+			}
+			return pushLuaBoolResult(L, false, err)
+		}
+		if !parentInfo.IsDir() {
+			return pushLuaBoolResult(L, false, fmt.Errorf("destination parent path is not a directory: %s", destParentDir))
+		}
+
+		// Prevent overwriting an existing directory at destination
+		if destInfo, err := os.Stat(destinationPath); err == nil && destInfo.IsDir() {
+			return pushLuaBoolResult(L, false, fmt.Errorf("cannot overwrite existing directory at destination: %s", destinationPath))
+		}
+
+		err = os.Rename(sourcePath, destinationPath)
 		return pushLuaBoolResult(L, err == nil, err)
 	}))
 
