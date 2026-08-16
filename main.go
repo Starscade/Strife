@@ -761,7 +761,7 @@ func main() {
 		"port": port,
 		"root": rootDir,
 		"sql":  initSQLPath,
-		"tls":  keyPath,
+		"tls":  os.Getenv("STRIFE_TLS"),
 	})
 
 	go func() {
