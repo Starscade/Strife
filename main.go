@@ -77,7 +77,7 @@ func hasHiddenComponent(hostRootDir, targetPath string) bool {
 	}
 	parts := strings.Split(rel, string(filepath.Separator))
 	for _, part := range parts {
-		if strings.HasPrefix(part, ".") && part != "." && part != ".." {
+		if strings.HasPrefix(part, ".") && part != "." && part != ".." && part != "_" {
 			return true
 		}
 	}
@@ -411,7 +411,7 @@ func handleLuaScript(w http.ResponseWriter, r *http.Request, scriptPath string, 
 		resultTable := L.NewTable()
 		idx := 1
 		for _, entry := range entries {
-			if strings.HasPrefix(entry.Name(), ".") {
+			if strings.HasPrefix(entry.Name(), ".") && entry.Name() != "_" {
 				continue
 			}
 			entryTable := L.NewTable()
@@ -576,6 +576,61 @@ func handleLuaScript(w http.ResponseWriter, r *http.Request, scriptPath string, 
 	}
 	w.WriteHeader(statusCode)
 	w.Write(stdout.Bytes())
+}
+
+func findMatchingPath(hostRootDir, requestPath string) (string, bool) {
+	cleanPath := filepath.Clean(filepath.FromSlash(requestPath))
+	parts := []string{}
+	if cleanPath != "." && cleanPath != "/" {
+		parts = strings.Split(strings.TrimPrefix(cleanPath, string(filepath.Separator)), string(filepath.Separator))
+	}
+
+	var search func(currDir string, idx int) (string, bool)
+	search = func(currDir string, idx int) (string, bool) {
+		if idx == len(parts) {
+			return currDir, true
+		}
+
+		part := parts[idx]
+
+		// 1. Try exact match component
+		exactPath := filepath.Join(currDir, part)
+		if info, err := os.Stat(exactPath); err == nil {
+			if resolved, err := filepath.EvalSymlinks(exactPath); err == nil {
+				if inf2, err2 := os.Stat(resolved); err2 == nil {
+					exactPath = resolved
+					info = inf2
+				}
+			}
+			if info.IsDir() {
+				if res, ok := search(exactPath, idx+1); ok {
+					return res, true
+				}
+			} else if idx == len(parts)-1 {
+				return exactPath, true
+			}
+		}
+
+		// 2. Try wildcard match component '_'
+		wildcardPath := filepath.Join(currDir, "_")
+		if info, err := os.Stat(wildcardPath); err == nil {
+			if resolved, err := filepath.EvalSymlinks(wildcardPath); err == nil {
+				if inf2, err2 := os.Stat(resolved); err2 == nil {
+					wildcardPath = resolved
+					info = inf2
+				}
+			}
+			if info.IsDir() {
+				if res, ok := search(wildcardPath, idx+1); ok {
+					return res, true
+				}
+			}
+		}
+
+		return "", false
+	}
+
+	return search(hostRootDir, 0)
 }
 
 func tryServeIndexOrScript(w http.ResponseWriter, r *http.Request, targetPath string, db *sql.DB, rootDir, host string) bool {
@@ -787,10 +842,9 @@ func main() {
 			return
 		}
 
-		targetPath := filepath.Join(hostRootDir, filepath.FromSlash(r.URL.Path))
-		cleanTarget, err := filepath.Abs(targetPath)
-		if err != nil {
-			w.WriteHeader(http.StatusBadRequest)
+		cleanTarget, found := findMatchingPath(hostRootDir, r.URL.Path)
+		if !found {
+			w.WriteHeader(http.StatusNotFound)
 			return
 		}
 
@@ -842,7 +896,7 @@ func main() {
 			return
 		}
 
-		http.FileServer(http.Dir(hostRootDir)).ServeHTTP(w, r)
+		http.ServeFile(w, r, cleanTarget)
 	})
 
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
