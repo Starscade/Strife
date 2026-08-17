@@ -853,17 +853,9 @@ func main() {
 			return
 		}
 
-		if resolved, err := filepath.EvalSymlinks(cleanTarget); err == nil {
-			if hasHiddenComponent(hostRootDir, resolved) {
-				w.WriteHeader(http.StatusForbidden)
-				return
-			}
-			cleanTarget = resolved
-		}
-
 		if r.URL.Path == "/" || strings.HasSuffix(r.URL.Path, "/") {
 			if info, err := os.Stat(cleanTarget); err == nil && !info.IsDir() {
-				// Fallthrough to standard file handling below
+				// Fallthrough
 			} else {
 				if tryServeIndexOrScript(w, r, cleanTarget, db, rootDir, host) {
 					return
