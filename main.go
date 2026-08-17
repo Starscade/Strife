@@ -3,17 +3,10 @@ package main
 import (
 	"bytes"
 	"context"
-	"crypto/rand"
-	"crypto/rsa"
-	"crypto/tls"
-	"crypto/x509"
-	"crypto/x509/pkix"
 	"database/sql"
 	"encoding/json"
-	"encoding/pem"
 	"fmt"
 	"io"
-	"math/big"
 	"net"
 	"net/http"
 	"os"
@@ -648,146 +641,6 @@ func tryServeIndexOrScript(w http.ResponseWriter, r *http.Request, targetPath st
 	return false
 }
 
-func loadOrGenerateCA(rootDir string) (*x509.Certificate, *rsa.PrivateKey, error) {
-	certPath := filepath.Join(rootDir, "Strife.crt")
-	privKeyPath := filepath.Join(rootDir, "Strife.key")
-
-	var priv *rsa.PrivateKey
-	var err error
-
-	// Check if we already persisted a CA private key locally in rootDir
-	if _, err := os.Stat(privKeyPath); err == nil {
-		if keyPEM, err := os.ReadFile(privKeyPath); err == nil {
-			if blockKey, _ := pem.Decode(keyPEM); blockKey != nil {
-				if p, err := x509.ParsePKCS1PrivateKey(blockKey.Bytes); err == nil {
-					priv = p
-				} else if parsedKey, parseErr := x509.ParsePKCS8PrivateKey(blockKey.Bytes); parseErr == nil {
-					if rsaKey, ok := parsedKey.(*rsa.PrivateKey); ok {
-						priv = rsaKey
-					}
-				}
-			}
-		}
-	}
-
-	// If no private key found, generate a new one
-	if priv == nil {
-		priv, err = rsa.GenerateKey(rand.Reader, 2048)
-		if err != nil {
-			writeLog("ERROR", "TLS", map[string]string{"error": err.Error(), "msg": "Failed to generate RSA key"})
-			return nil, nil, err
-		}
-		// Save it locally in rootDir so it remains consistent across restarts
-		privFile, err := os.Create(privKeyPath)
-		if err == nil {
-			pem.Encode(privFile, &pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(priv)})
-			privFile.Close()
-		}
-	}
-
-	// Try loading existing certificate if present in rootDir
-	if _, err := os.Stat(certPath); err == nil {
-		if certPEM, err := os.ReadFile(certPath); err == nil {
-			if blockCert, _ := pem.Decode(certPEM); blockCert != nil {
-				if cert, err := x509.ParseCertificate(blockCert.Bytes); err == nil {
-					return cert, priv, nil
-				}
-			}
-		}
-	}
-
-	// Otherwise, create a new CA certificate signed with `priv`
-	serialNumberLimit := new(big.Int).Lsh(big.NewInt(1), 128)
-	serialNumber, err := rand.Int(rand.Reader, serialNumberLimit)
-	if err != nil {
-		writeLog("ERROR", "TLS", map[string]string{"error": err.Error(), "msg": "Failed to generate serial number"})
-		return nil, nil, err
-	}
-
-	tmpl := x509.Certificate{
-		SerialNumber: serialNumber,
-		Subject: pkix.Name{
-			CommonName:   "Shinra Inc.",
-			Organization: []string{"Shinra Electric Power Company"},
-		},
-		NotBefore:             time.Now().Add(-24 * time.Hour),
-		NotAfter:              time.Now().AddDate(10, 0, 0),
-		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature,
-		IsCA:                  true,
-		BasicConstraintsValid: true,
-	}
-
-	derBytes, err := x509.CreateCertificate(rand.Reader, &tmpl, &tmpl, &priv.PublicKey, priv)
-	if err != nil {
-		writeLog("ERROR", "TLS", map[string]string{"error": err.Error(), "msg": "Failed to create CA certificate"})
-		return nil, nil, err
-	}
-
-	cert, err := x509.ParseCertificate(derBytes)
-	if err != nil {
-		writeLog("ERROR", "TLS", map[string]string{"error": err.Error(), "msg": "Failed to parse CA certificate"})
-		return nil, nil, err
-	}
-
-	certFile, err := os.Create(certPath)
-	if err != nil {
-		writeLog("ERROR", "TLS", map[string]string{"error": err.Error(), "msg": "Failed to create certificate file"})
-		return nil, nil, err
-	}
-	defer certFile.Close()
-	pem.Encode(certFile, &pem.Block{Type: "CERTIFICATE", Bytes: derBytes})
-
-	return cert, priv, nil
-}
-
-func generateHostCert(rootDir, host string, caCert *x509.Certificate, caKey *rsa.PrivateKey) (tls.Certificate, error) {
-	priv, err := rsa.GenerateKey(rand.Reader, 2048)
-	if err != nil {
-		writeLog("ERROR", "TLS", map[string]string{"error": err.Error(), "host": host, "msg": "Failed to generate host RSA key"})
-		return tls.Certificate{}, err
-	}
-
-	serialNumberLimit := new(big.Int).Lsh(big.NewInt(1), 128)
-	serialNumber, err := rand.Int(rand.Reader, serialNumberLimit)
-	if err != nil {
-		writeLog("ERROR", "TLS", map[string]string{"error": err.Error(), "host": host, "msg": "Failed to generate host serial number"})
-		return tls.Certificate{}, err
-	}
-
-	tmpl := x509.Certificate{
-		SerialNumber: serialNumber,
-		Subject: pkix.Name{
-			CommonName: host,
-		},
-		NotBefore:             time.Now().Add(-24 * time.Hour),
-		NotAfter:              time.Now().AddDate(1, 0, 0),
-		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
-		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-		BasicConstraintsValid: true,
-	}
-
-	if ip := net.ParseIP(host); ip != nil {
-		tmpl.IPAddresses = []net.IP{ip}
-	} else {
-		tmpl.DNSNames = []string{host, "*." + host}
-	}
-
-	derBytes, err := x509.CreateCertificate(rand.Reader, &tmpl, caCert, &priv.PublicKey, caKey)
-	if err != nil {
-		writeLog("ERROR", "TLS", map[string]string{"error": err.Error(), "host": host, "msg": "Failed to create host certificate"})
-		return tls.Certificate{}, err
-	}
-
-	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: derBytes})
-	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(priv)})
-
-	cert, err := tls.X509KeyPair(certPEM, keyPEM)
-	if err != nil {
-		writeLog("ERROR", "TLS", map[string]string{"error": err.Error(), "host": host, "msg": "Failed to load X509 key pair"})
-	}
-	return cert, err
-}
-
 func main() {
 	db, err := sql.Open("sqlite", ":memory:")
 	if err != nil || db.Ping() != nil {
@@ -912,56 +765,6 @@ func main() {
 		Handler: handler,
 	}
 
-	useTLS := (port == 443)
-	if useTLS {
-		caCert, caKey, err := loadOrGenerateCA(rootDir)
-		if err != nil {
-			writeLog("ERROR", "SERVER", map[string]string{"error": err.Error(), "msg": "Failed to initialize root CA!"})
-			os.Exit(1)
-		}
-
-		certsMap := make(map[string]*tls.Certificate)
-		entries, err := os.ReadDir(rootDir)
-		if err == nil {
-			for _, entry := range entries {
-				if entry.IsDir() {
-					hostName := entry.Name()
-					hostCert, err := generateHostCert(rootDir, hostName, caCert, caKey)
-					if err == nil {
-						certsMap[hostName] = &hostCert
-					}
-				}
-			}
-		}
-
-		server.TLSConfig = &tls.Config{
-			GetCertificate: func(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
-				serverName := hello.ServerName
-				if serverName == "" {
-					if hello.Conn != nil && hello.Conn.LocalAddr() != nil {
-						if host, _, err := net.SplitHostPort(hello.Conn.LocalAddr().String()); err == nil {
-							serverName = host
-						}
-					}
-				}
-				if cert, ok := certsMap[serverName]; ok {
-					return cert, nil
-				}
-				if h, _, err := net.SplitHostPort(serverName); err == nil {
-					if cert, ok := certsMap[h]; ok {
-						return cert, nil
-					}
-				}
-				for _, cert := range certsMap {
-					return cert, nil
-				}
-				certErr := fmt.Errorf("no certificate available for host: %s", serverName)
-				writeLog("ERROR", "TLS", map[string]string{"error": certErr.Error(), "server_name": serverName})
-				return nil, certErr
-			},
-		}
-	}
-
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 
@@ -969,16 +772,10 @@ func main() {
 		"port": port,
 		"root": rootDir,
 		"sql":  initSQLPath,
-		"tls":  useTLS,
 	})
 
 	go func() {
-		var err error
-		if useTLS {
-			err = server.ListenAndServeTLS("", "")
-		} else {
-			err = server.ListenAndServe()
-		}
+		err := server.ListenAndServe()
 		if err != nil && err != http.ErrServerClosed {
 			writeLog("ERROR", "SERVER", map[string]string{"error": err.Error()})
 			os.Exit(1)
