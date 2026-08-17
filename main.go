@@ -251,6 +251,48 @@ func handleLuaScript(w http.ResponseWriter, r *http.Request, scriptPath string, 
 	}))
 	strifeTable.RawSetString("response", responseTable)
 
+	pathTable := L.NewTable()
+	pathTable.RawSetString("segments", L.NewFunction(func(L *lua.LState) int {
+		p := L.CheckString(1)
+		clean := filepath.Clean(filepath.FromSlash(p))
+		if clean == "." || clean == "/" {
+			tbl := L.NewTable()
+			if clean == "/" {
+				tbl.RawSetInt(1, lua.LString("/"))
+			}
+			L.Push(tbl)
+			return 1
+		}
+		parts := strings.Split(strings.TrimPrefix(clean, "/"), "/")
+		tbl := L.NewTable()
+		for i, part := range parts {
+			if part == "" {
+				continue
+			}
+			if i == 0 {
+				tbl.RawSetInt(len(parts)-i, lua.LString("/"+part)) // wait, let's keep correct order
+			}
+		}
+		// Let's rewrite segments properly maintaining order:
+		var validParts []string
+		for _, part := range strings.Split(clean, "/") {
+			if part != "" {
+				validParts = append(validParts, part)
+			}
+		}
+		tbl = L.NewTable()
+		for i, part := range validParts {
+			if i == 0 {
+				tbl.RawSetInt(i+1, lua.LString("/"+part))
+			} else {
+				tbl.RawSetInt(i+1, lua.LString(part))
+			}
+		}
+		L.Push(tbl)
+		return 1
+	}))
+	strifeTable.RawSetString("path", pathTable)
+
 	dbTable := L.NewTable()
 	dbTable.RawSetString("query", L.NewFunction(func(L *lua.LState) int {
 		if db == nil {
