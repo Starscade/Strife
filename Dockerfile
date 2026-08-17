@@ -7,7 +7,8 @@ RUN ./install.sh
 
 FROM scratch
 
-ENV STRIFE_DB=/var/lib/Strife/db.sqlite3
+ENV STRIFE_SQL=/var/lib/Strife/init.sql
+
 COPY --from=builder /root/.local/bin/Strife /usr/local/bin/Strife
 WORKDIR /srv/www
 
