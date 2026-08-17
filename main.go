@@ -70,6 +70,20 @@ func getCleanHost(r *http.Request) string {
 	return host
 }
 
+func hasHiddenComponent(hostRootDir, targetPath string) bool {
+	rel, err := filepath.Rel(hostRootDir, targetPath)
+	if err != nil || rel == "." {
+		return false
+	}
+	parts := strings.Split(rel, string(filepath.Separator))
+	for _, part := range parts {
+		if strings.HasPrefix(part, ".") && part != "." && part != ".." {
+			return true
+		}
+	}
+	return false
+}
+
 func pushLuaError(L *lua.LState, err error) int {
 	L.Push(lua.LNil)
 	L.Push(lua.LString(err.Error()))
@@ -106,8 +120,15 @@ func resolveHostPath(rootDir, host, scriptPath, relPath string) (string, error) 
 		return "", err
 	}
 
+	if hasHiddenComponent(hostRootDir, cleanTarget) {
+		return "", fmt.Errorf("access denied: path contains hidden components")
+	}
+
 	evalTarget, err := filepath.EvalSymlinks(cleanTarget)
 	if err == nil {
+		if hasHiddenComponent(hostRootDir, evalTarget) {
+			return "", fmt.Errorf("access denied: path contains hidden components")
+		}
 		return evalTarget, nil
 	}
 
@@ -388,7 +409,11 @@ func handleLuaScript(w http.ResponseWriter, r *http.Request, scriptPath string, 
 		}
 
 		resultTable := L.NewTable()
-		for i, entry := range entries {
+		idx := 1
+		for _, entry := range entries {
+			if strings.HasPrefix(entry.Name(), ".") {
+				continue
+			}
 			entryTable := L.NewTable()
 			entryTable.RawSetString("name", lua.LString(entry.Name()))
 
@@ -417,7 +442,8 @@ func handleLuaScript(w http.ResponseWriter, r *http.Request, scriptPath string, 
 				entryTable.RawSetString("size", lua.LNumber(info.Size()))
 				entryTable.RawSetString("mod_time", lua.LNumber(info.ModTime().Unix()))
 			}
-			resultTable.RawSetInt(i+1, entryTable)
+			resultTable.RawSetInt(idx, entryTable)
+			idx++
 		}
 
 		L.Push(resultTable)
@@ -755,47 +781,68 @@ func main() {
 			return
 		}
 
-		targetPath := filepath.Join(dir, filepath.FromSlash(r.URL.Path))
-		if resolved, err := filepath.EvalSymlinks(targetPath); err == nil {
-			targetPath = resolved
+		hostRootDir, err := filepath.Abs(dir)
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+
+		targetPath := filepath.Join(hostRootDir, filepath.FromSlash(r.URL.Path))
+		cleanTarget, err := filepath.Abs(targetPath)
+		if err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+
+		if hasHiddenComponent(hostRootDir, cleanTarget) {
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
+
+		if resolved, err := filepath.EvalSymlinks(cleanTarget); err == nil {
+			if hasHiddenComponent(hostRootDir, resolved) {
+				w.WriteHeader(http.StatusForbidden)
+				return
+			}
+			cleanTarget = resolved
 		}
 
 		if r.URL.Path == "/" || strings.HasSuffix(r.URL.Path, "/") {
-			if info, err := os.Stat(targetPath); err == nil && !info.IsDir() {
+			if info, err := os.Stat(cleanTarget); err == nil && !info.IsDir() {
 				// Fallthrough to standard file handling below
 			} else {
-				if tryServeIndexOrScript(w, r, targetPath, db, rootDir, host) {
+				if tryServeIndexOrScript(w, r, cleanTarget, db, rootDir, host) {
 					return
 				}
-				if infoDir, err := os.Stat(targetPath); err == nil && infoDir.IsDir() {
+				if infoDir, err := os.Stat(cleanTarget); err == nil && infoDir.IsDir() {
 					w.WriteHeader(http.StatusForbidden)
 					return
 				}
 			}
 		}
 
-		if strings.HasSuffix(targetPath, ".lua") {
-			if info, err := os.Stat(targetPath); err == nil && !info.IsDir() {
-				handleLuaScript(w, r, targetPath, db, rootDir, host)
+		if strings.HasSuffix(cleanTarget, ".lua") {
+			if info, err := os.Stat(cleanTarget); err == nil && !info.IsDir() {
+				handleLuaScript(w, r, cleanTarget, db, rootDir, host)
 				return
 			}
 		}
 
-		info, err := os.Stat(targetPath)
+		info, err := os.Stat(cleanTarget)
 		if os.IsNotExist(err) {
 			w.WriteHeader(http.StatusNotFound)
 			return
 		}
 
 		if err == nil && info.IsDir() {
-			if tryServeIndexOrScript(w, r, targetPath, db, rootDir, host) {
+			if tryServeIndexOrScript(w, r, cleanTarget, db, rootDir, host) {
 				return
 			}
 			w.WriteHeader(http.StatusForbidden)
 			return
 		}
 
-		http.FileServer(http.Dir(dir)).ServeHTTP(w, r)
+		http.FileServer(http.Dir(hostRootDir)).ServeHTTP(w, r)
 	})
 
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
