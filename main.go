@@ -409,7 +409,14 @@ func handleLuaScript(w http.ResponseWriter, r *http.Request, scriptPath string, 
 			return pushLuaError(L, fmt.Errorf("Database not initialized!"))
 		}
 		query := L.CheckString(1)
-		rows, err := db.QueryContext(r.Context(), query)
+		var args []interface{}
+		top := L.GetTop()
+		if top > 1 {
+			for i := 2; i <= top; i++ {
+				args = append(args, luaValueToGo(L.Get(i)))
+			}
+		}
+		rows, err := db.QueryContext(r.Context(), query, args...)
 		if err != nil {
 			return pushLuaError(L, err)
 		}
