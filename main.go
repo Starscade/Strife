@@ -9,6 +9,8 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httputil"
+	"net/url"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -359,6 +361,22 @@ func handleLuaScript(w http.ResponseWriter, r *http.Request, scriptPath string, 
 		L.Push(lua.LNil)
 		return 2
 	}))
+
+	httpModuleTable.RawSetString("reverse_proxy", L.NewFunction(func(L *lua.LState) int {
+		targetStr := L.CheckString(1)
+		targetURL, err := url.Parse(targetStr)
+		if err != nil {
+			return pushLuaError(L, err)
+		}
+
+		proxy := httputil.NewSingleHostReverseProxy(targetURL)
+		proxy.ServeHTTP(w, r)
+
+		L.Push(lua.LBool(true))
+		L.Push(lua.LNil)
+		return 2
+	}))
+
 	strifeTable.RawSetString("http", httpModuleTable)
 
 	pathTable := L.NewTable()
