@@ -47,10 +47,10 @@ func (rec *responseRecorder) Write(b []byte) (int, error) {
 
 func writeLog(level, topic string, details interface{}) {
 	logData := map[string]interface{}{
-		"details":   details,
-		"level":     level,
-		"timestamp": time.Now().Format(time.RFC3339),
-		"topic":     topic,
+		"details": details,
+		"level":   level,
+		"time":    time.Now().Format(time.RFC3339),
+		"topic":   topic,
 	}
 	if logJSON, err := json.Marshal(logData); err == nil {
 		fmt.Println(string(logJSON))
