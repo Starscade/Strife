@@ -240,6 +240,24 @@ func handleLuaScript(w http.ResponseWriter, r *http.Request, scriptPath string, 
 
 	strifeTable := L.NewTable()
 
+	strifeTable.RawSetString("log", L.NewFunction(func(L *lua.LState) int {
+		level := "INFO"
+		var details interface{}
+
+		top := L.GetTop()
+		if top >= 2 {
+			level = strings.ToUpper(L.CheckString(1))
+			details = luaValueToGo(L.Get(2))
+		} else if top == 1 {
+			details = luaValueToGo(L.Get(1))
+		} else {
+			details = ""
+		}
+
+		writeLog(level, "LUA", details)
+		return 0
+	}))
+
 	responseTable := L.NewTable()
 	responseTable.RawSetString("status", L.NewFunction(func(L *lua.LState) int {
 		statusCode = L.CheckInt(1)
