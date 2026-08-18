@@ -251,6 +251,98 @@ func handleLuaScript(w http.ResponseWriter, r *http.Request, scriptPath string, 
 	}))
 	strifeTable.RawSetString("response", responseTable)
 
+	httpModuleTable := L.NewTable()
+	httpModuleTable.RawSetString("request", L.NewFunction(func(L *lua.LState) int {
+		var urlStr, method string
+		var headersTbl *lua.LTable
+		var bodyReader io.Reader
+
+		// Check if the single argument is a Lua table (options pattern)
+		if L.GetTop() == 1 {
+			if tbl, ok := L.Get(1).(*lua.LTable); ok {
+				if urlVal := tbl.RawGetString("url"); urlVal != lua.LNil {
+					urlStr = urlVal.String()
+				}
+				if methodVal := tbl.RawGetString("method"); methodVal != lua.LNil {
+					method = strings.ToUpper(methodVal.String())
+				}
+				if headersVal := tbl.RawGetString("headers"); headersVal != lua.LNil {
+					if ht, ok := headersVal.(*lua.LTable); ok {
+						headersTbl = ht
+					}
+				}
+				if bodyVal := tbl.RawGetString("body"); bodyVal != lua.LNil {
+					bodyReader = strings.NewReader(bodyVal.String())
+				}
+			}
+		}
+
+		// Fallback to positional arguments if options table wasn't used
+		if urlStr == "" {
+			urlStr = L.CheckString(1)
+			method = "GET"
+			if L.GetTop() >= 2 && L.Get(2) != lua.LNil {
+				method = strings.ToUpper(L.CheckString(2))
+			}
+			if L.GetTop() >= 3 && L.Get(3) != lua.LNil {
+				if ht, ok := L.Get(3).(*lua.LTable); ok {
+					headersTbl = ht
+				}
+			}
+			if L.GetTop() >= 4 && L.Get(4) != lua.LNil {
+				bodyReader = strings.NewReader(L.CheckString(4))
+			}
+		}
+
+		if method == "" {
+			method = "GET"
+		}
+
+		req, err := http.NewRequestWithContext(r.Context(), method, urlStr, bodyReader)
+		if err != nil {
+			return pushLuaError(L, err)
+		}
+
+		if headersTbl != nil {
+			headersTbl.ForEach(func(k, v lua.LValue) {
+				req.Header.Set(k.String(), v.String())
+			})
+		}
+
+		client := &http.Client{
+			Timeout: 30 * time.Second,
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			return pushLuaError(L, err)
+		}
+		defer resp.Body.Close()
+
+		respBodyBytes, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return pushLuaError(L, err)
+		}
+
+		resTable := L.NewTable()
+		resTable.RawSetString("status", lua.LNumber(resp.StatusCode))
+
+		respHeadersTable := L.NewTable()
+		for hk, hvals := range resp.Header {
+			hValsTbl := L.NewTable()
+			for hi, hv := range hvals {
+				hValsTbl.RawSetInt(hi+1, lua.LString(hv))
+			}
+			respHeadersTable.RawSetString(hk, hValsTbl)
+		}
+		resTable.RawSetString("headers", respHeadersTable)
+		resTable.RawSetString("body", lua.LString(string(respBodyBytes)))
+
+		L.Push(resTable)
+		L.Push(lua.LNil)
+		return 2
+	}))
+	strifeTable.RawSetString("http", httpModuleTable)
+
 	pathTable := L.NewTable()
 	pathTable.RawSetString("segments", L.NewFunction(func(L *lua.LState) int {
 		p := L.CheckString(1)
