@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"html/template"
 	"io"
 	"net"
 	"net/http"
@@ -214,6 +215,25 @@ func luaValueToGo(val lua.LValue) interface{} {
 	}
 }
 
+func parseTemplate(tmplStr string, data *lua.LTable) (string, error) {
+	t, err := template.New("template").Parse(tmplStr)
+	if err != nil {
+		return "", err
+	}
+
+	var goData interface{}
+	if data != nil {
+		goData = luaValueToGo(data)
+	}
+
+	var buf bytes.Buffer
+	if err := t.Execute(&buf, goData); err != nil {
+		return "", err
+	}
+
+	return buf.String(), nil
+}
+
 func handleLuaScript(w http.ResponseWriter, r *http.Request, scriptPath string, db *sql.DB, rootDir, host string) {
 	L := lua.NewState()
 	defer L.Close()
@@ -271,13 +291,33 @@ func handleLuaScript(w http.ResponseWriter, r *http.Request, scriptPath string, 
 	}))
 	strifeTable.RawSetString("response", responseTable)
 
+	templateTable := L.NewTable()
+	templateTable.RawSetString("parse", L.NewFunction(func(L *lua.LState) int {
+		tmplStr := L.CheckString(1)
+		var dataTbl *lua.LTable
+		if L.GetTop() >= 2 {
+			if tbl, ok := L.Get(2).(*lua.LTable); ok {
+				dataTbl = tbl
+			}
+		}
+		result, err := parseTemplate(tmplStr, dataTbl)
+		if err != nil {
+			L.Push(lua.LNil)
+			L.Push(lua.LString(err.Error()))
+			return 2
+		}
+		L.Push(lua.LString(result))
+		L.Push(lua.LNil)
+		return 2
+	}))
+	strifeTable.RawSetString("template", templateTable)
+
 	httpModuleTable := L.NewTable()
 	httpModuleTable.RawSetString("request", L.NewFunction(func(L *lua.LState) int {
 		var urlStr, method string
 		var headersTbl *lua.LTable
 		var bodyReader io.Reader
 
-		// Check if the single argument is a Lua table (options pattern)
 		if L.GetTop() == 1 {
 			if tbl, ok := L.Get(1).(*lua.LTable); ok {
 				if urlVal := tbl.RawGetString("url"); urlVal != lua.LNil {
