@@ -280,16 +280,62 @@ func handleLuaScript(w http.ResponseWriter, r *http.Request, scriptPath string, 
 		return 0
 	}))
 
-	responseTable := L.NewTable()
-	responseTable.RawSetString("status", L.NewFunction(func(L *lua.LState) int {
-		statusCode = L.CheckInt(1)
+	// --- response.headers Proxy ---
+	hTable := L.NewTable()
+	hMeta := L.NewTable()
+	hMeta.RawSetString("__index", L.NewFunction(func(L *lua.LState) int {
+		key := L.CheckString(2)
+		if v, ok := headers[key]; ok && len(v) > 0 {
+			L.Push(lua.LString(v[0]))
+			return 1
+		}
+		L.Push(lua.LNil)
+		return 1
+	}))
+	hMeta.RawSetString("__newindex", L.NewFunction(func(L *lua.LState) int {
+		key := L.CheckString(2)
+		val := L.CheckString(3)
+		headers.Set(key, val)
 		return 0
 	}))
-	responseTable.RawSetString("header", L.NewFunction(func(L *lua.LState) int {
-		headers.Set(L.CheckString(1), L.CheckString(2))
+	L.SetMetatable(hTable, hMeta)
+
+	// --- response Proxy ---
+	rTable := L.NewTable()
+	rMeta := L.NewTable()
+	rMeta.RawSetString("__index", L.NewFunction(func(L *lua.LState) int {
+		key := L.CheckString(2)
+		if key == "status" {
+			L.Push(lua.LNumber(statusCode))
+			return 1
+		}
+		if key == "headers" {
+			L.Push(hTable)
+			return 1
+		}
+		L.Push(lua.LNil)
+		return 1
+	}))
+	rMeta.RawSetString("__newindex", L.NewFunction(func(L *lua.LState) int {
+		key := L.CheckString(2)
+		if key == "status" {
+			statusCode = L.CheckInt(3)
+			return 0
+		}
+		if key == "headers" {
+			val := L.Get(3)
+			if tbl, ok := val.(*lua.LTable); ok {
+				tbl.ForEach(func(k, v lua.LValue) {
+					headers.Set(k.String(), v.String())
+				})
+				return 0
+			}
+		}
 		return 0
 	}))
-	strifeTable.RawSetString("response", responseTable)
+	L.SetMetatable(rTable, rMeta)
+
+	strifeTable.RawSetString("response", rTable)
 
 	templateTable := L.NewTable()
 	templateTable.RawSetString("parse", L.NewFunction(func(L *lua.LState) int {
@@ -431,24 +477,13 @@ func handleLuaScript(w http.ResponseWriter, r *http.Request, scriptPath string, 
 			L.Push(tbl)
 			return 1
 		}
-		parts := strings.Split(strings.TrimPrefix(clean, "/"), "/")
-		tbl := L.NewTable()
-		for i, part := range parts {
-			if part == "" {
-				continue
-			}
-			if i == 0 {
-				tbl.RawSetInt(len(parts)-i, lua.LString("/"+part)) // wait, let's keep correct order
-			}
-		}
-		// Let's rewrite segments properly maintaining order:
 		var validParts []string
 		for _, part := range strings.Split(clean, "/") {
 			if part != "" {
 				validParts = append(validParts, part)
 			}
 		}
-		tbl = L.NewTable()
+		tbl := L.NewTable()
 		for i, part := range validParts {
 			if i == 0 {
 				tbl.RawSetInt(i+1, lua.LString("/"+part))
