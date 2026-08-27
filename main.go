@@ -921,6 +921,8 @@ func main() {
 	}
 	defer db.Close()
 
+	db.SetMaxOpenConns(1)
+
 	initSQLPath := os.Getenv("STRIFE_SQL")
 	if initSQLPath != "" {
 		sqlBytes, err := os.ReadFile(initSQLPath)
