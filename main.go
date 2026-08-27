@@ -249,6 +249,7 @@ func handleLuaScript(w http.ResponseWriter, r *http.Request, scriptPath string, 
 	var stdout bytes.Buffer
 	var statusCode = http.StatusOK
 	headers := make(http.Header)
+	var binaryWritten bool
 
 	L.SetGlobal("print", L.NewFunction(func(L *lua.LState) int {
 		top := L.GetTop()
@@ -331,6 +332,20 @@ func handleLuaScript(w http.ResponseWriter, r *http.Request, scriptPath string, 
 				return 0
 			}
 		}
+		return 0
+	}))
+
+	rTable.RawSetString("writeBlob", L.NewFunction(func(L *lua.LState) int {
+		blob := L.CheckString(1)
+		// To write directly to the response, we must ensure headers are sent
+		for k, vals := range headers {
+			for _, v := range vals {
+				w.Header().Add(k, v)
+			}
+		}
+		w.WriteHeader(statusCode)
+		w.Write([]byte(blob))
+		binaryWritten = true
 		return 0
 	}))
 	L.SetMetatable(rTable, rMeta)
@@ -814,13 +829,15 @@ func handleLuaScript(w http.ResponseWriter, r *http.Request, scriptPath string, 
 		return
 	}
 
-	for k, vals := range headers {
-		for _, v := range vals {
-			w.Header().Add(k, v)
+	if !binaryWritten {
+		for k, vals := range headers {
+			for _, v := range vals {
+				w.Header().Add(k, v)
+			}
 		}
+		w.WriteHeader(statusCode)
+		w.Write(stdout.Bytes())
 	}
-	w.WriteHeader(statusCode)
-	w.Write(stdout.Bytes())
 }
 
 func findMatchingPath(hostRootDir, requestPath string) (string, bool) {
