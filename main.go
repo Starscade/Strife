@@ -825,7 +825,6 @@ func handleLuaScript(w http.ResponseWriter, r *http.Request, scriptPath string, 
 	if err := L.DoFile(scriptPath); err != nil {
 		writeLog("ERROR", "LUA", map[string]string{"error": err.Error(), "path": scriptPath})
 		w.WriteHeader(http.StatusInternalServerError)
-		w.Write([]byte(fmt.Sprintf("Lua error: %v", err)))
 		return
 	}
 
