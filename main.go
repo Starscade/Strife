@@ -486,7 +486,7 @@ func handleLuaScript(w http.ResponseWriter, r *http.Request, scriptPath string, 
 	strifeTable.RawSetString("http", httpModuleTable)
 
 	pathTable := L.NewTable()
-	pathTable.RawSetString("segments", L.NewFunction(func(L *lua.LState) int {
+	pathTable.RawSetString("split", L.NewFunction(func(L *lua.LState) int {
 		p := L.CheckString(1)
 		clean := filepath.Clean(filepath.FromSlash(p))
 		if clean == "." || clean == "/" {
