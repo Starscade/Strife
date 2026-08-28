@@ -486,6 +486,44 @@ func handleLuaScript(w http.ResponseWriter, r *http.Request, scriptPath string, 
 	strifeTable.RawSetString("http", httpModuleTable)
 
 	pathTable := L.NewTable()
+
+	pathTable.RawSetString("join", L.NewFunction(func(L *lua.LState) int {
+		top := L.GetTop()
+		if top == 0 {
+			L.Push(lua.LString(""))
+			return 1
+		}
+
+		var parts []string
+		isAbsolute := false
+
+		for i := 1; i <= top; i++ {
+			s := L.ToString(i)
+			if s == "" {
+				continue
+			}
+			if i == 1 && strings.HasPrefix(s, "/") {
+				isAbsolute = true
+			}
+			parts = append(parts, strings.Trim(s, "/"))
+		}
+
+		var cleaned []string
+		for _, p := range parts {
+			if p != "" && p != "." {
+				cleaned = append(cleaned, p)
+			}
+		}
+
+		result := strings.Join(cleaned, "/")
+		if isAbsolute {
+			result = "/" + result
+		}
+
+		L.Push(lua.LString(result))
+		return 1
+	}))
+
 	pathTable.RawSetString("split", L.NewFunction(func(L *lua.LState) int {
 		p := L.CheckString(1)
 		clean := filepath.Clean(filepath.FromSlash(p))
