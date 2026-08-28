@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -788,6 +789,23 @@ func handleLuaScript(w http.ResponseWriter, r *http.Request, scriptPath string, 
 		return 2
 	}))
 	strifeTable.RawSetString("os", osTable)
+
+	cryptoTable := L.NewTable()
+	cryptoTable.RawSetString("genUUID", L.NewFunction(func(L *lua.LState) int {
+		uuid := make([]byte, 16)
+		if _, err := io.ReadFull(rand.Reader, uuid); err != nil {
+			L.Push(lua.LNil)
+			L.Push(lua.LString(err.Error()))
+			return 2
+		}
+		uuid[6] = (uuid[6] & 0x0f) | 0x40 // Version 4
+		uuid[8] = (uuid[8] & 0x3f) | 0x80 // Variant 10xx
+		res := fmt.Sprintf("%x-%x-%x-%x-%x", uuid[0:4], uuid[4:6], uuid[6:8], uuid[8:10], uuid[10:])
+		L.Push(lua.LString(res))
+		L.Push(lua.LNil)
+		return 2
+	}))
+	strifeTable.RawSetString("crypto", cryptoTable)
 
 	reqTable := L.NewTable()
 	reqTable.RawSetString("method", lua.LString(r.Method))
