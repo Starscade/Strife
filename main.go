@@ -3,8 +3,12 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/hmac"
 	"crypto/rand"
+	"crypto/sha1"
 	"database/sql"
+	"encoding/base32"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -798,13 +802,44 @@ func handleLuaScript(w http.ResponseWriter, r *http.Request, scriptPath string, 
 			L.Push(lua.LString(err.Error()))
 			return 2
 		}
-		uuid[6] = (uuid[6] & 0x0f) | 0x40 // Version 4
-		uuid[8] = (uuid[8] & 0x3f) | 0x80 // Variant 10xx
+		uuid[6] = (uuid[6] & 0x0f) | 0x40
+		uuid[8] = (uuid[8] & 0x3f) | 0x80
 		res := fmt.Sprintf("%x-%x-%x-%x-%x", uuid[0:4], uuid[4:6], uuid[6:8], uuid[8:10], uuid[10:])
 		L.Push(lua.LString(res))
 		L.Push(lua.LNil)
 		return 2
 	}))
+
+	cryptoTable.RawSetString("getOTP", L.NewFunction(func(L *lua.LState) int {
+		secretStr := L.CheckString(1)
+		secret, err := base32.StdEncoding.WithPadding(base32.NoPadding).DecodeString(strings.ToUpper(secretStr))
+		if err != nil {
+			// Try with padding
+			secret, err = base32.StdEncoding.DecodeString(strings.ToUpper(secretStr))
+			if err != nil {
+				L.Push(lua.LNil)
+				L.Push(lua.LString("invalid base32 secret"))
+				return 2
+			}
+		}
+
+		counter := uint64(time.Now().Unix() / 30)
+		buf := make([]byte, 8)
+		binary.BigEndian.PutUint64(buf, counter)
+
+		mac := hmac.New(sha1.New, secret)
+		mac.Write(buf)
+		sum := mac.Sum(nil)
+
+		offset := sum[len(sum)-1] & 0xf
+		binaryCode := binary.BigEndian.Uint32(sum[offset:]) & 0x7fffffff
+		otp := binaryCode % 1000000
+
+		L.Push(lua.LString(fmt.Sprintf("%06d", otp)))
+		L.Push(lua.LNil)
+		return 2
+	}))
+
 	strifeTable.RawSetString("crypto", cryptoTable)
 
 	reqTable := L.NewTable()
