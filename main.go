@@ -8,6 +8,7 @@ import (
 	"crypto/sha1"
 	"database/sql"
 	"encoding/base32"
+	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
@@ -27,6 +28,7 @@ import (
 	"time"
 
 	lua "github.com/yuin/gopher-lua"
+	"golang.org/x/crypto/argon2"
 	_ "modernc.org/sqlite"
 )
 
@@ -874,6 +876,33 @@ func handleLuaScript(w http.ResponseWriter, r *http.Request, scriptPath string, 
 		otp := binaryCode % 1000000
 
 		L.Push(lua.LString(fmt.Sprintf("%06d", otp)))
+		L.Push(lua.LNil)
+		return 2
+	}))
+
+	cryptoTable.RawSetString("hashPassword", L.NewFunction(func(L *lua.LState) int {
+		pass := L.CheckString(1)
+		salt := make([]byte, 16)
+		if _, err := io.ReadFull(rand.Reader, salt); err != nil {
+			L.Push(lua.LNil)
+			L.Push(lua.LString(err.Error()))
+			return 2
+		}
+
+		timeParam := uint32(1)
+		memoryParam := uint32(64 * 1024)
+		threadsParam := uint8(4)
+		keyLen := uint32(32)
+
+		hash := argon2.IDKey([]byte(pass), salt, timeParam, memoryParam, threadsParam, keyLen)
+
+		b64Salt := base64.RawStdEncoding.EncodeToString(salt)
+		b64Hash := base64.RawStdEncoding.EncodeToString(hash)
+
+		res := fmt.Sprintf("$argon2id$v=%d$m=%d,t=%d,p=%d$%s$%s",
+			argon2.Version, memoryParam, timeParam, threadsParam, b64Salt, b64Hash)
+
+		L.Push(lua.LString(res))
 		L.Push(lua.LNil)
 		return 2
 	}))
