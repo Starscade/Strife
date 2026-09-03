@@ -566,7 +566,12 @@ func handleLuaScript(w http.ResponseWriter, r *http.Request, scriptPath string, 
 		top := L.GetTop()
 		if top > 1 {
 			for i := 2; i <= top; i++ {
-				args = append(args, luaValueToGo(L.Get(i)))
+				val := L.Get(i)
+				if s, ok := val.(lua.LString); ok {
+					args = append(args, []byte(s))
+				} else {
+					args = append(args, luaValueToGo(val))
+				}
 			}
 		}
 		rows, err := db.QueryContext(r.Context(), query, args...)
