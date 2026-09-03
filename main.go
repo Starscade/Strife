@@ -881,7 +881,7 @@ func handleLuaScript(w http.ResponseWriter, r *http.Request, scriptPath string, 
 	strifeTable.RawSetString("crypto", cryptoTable)
 
 	reqTable := L.NewTable()
-	reqTable.RawSetString("method", lua.LString(r.Method))
+	reqTable.RawSetString("method", lua.LString(strings.ToUpper(r.Method)))
 	reqTable.RawSetString("uri", lua.LString(r.RequestURI))
 	reqTable.RawSetString("path", lua.LString(r.URL.Path))
 	reqTable.RawSetString("host", lua.LString(r.Host))
