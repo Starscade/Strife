@@ -256,6 +256,7 @@ func handleLuaScript(w http.ResponseWriter, r *http.Request, scriptPath string, 
 	var stdout bytes.Buffer
 	var statusCode = http.StatusOK
 	headers := make(http.Header)
+	var responseBody bytes.Buffer
 	var binaryWritten bool
 
 	L.SetGlobal("print", L.NewFunction(func(L *lua.LState) int {
@@ -325,6 +326,10 @@ func handleLuaScript(w http.ResponseWriter, r *http.Request, scriptPath string, 
 			L.Push(hTable)
 			return 1
 		}
+		if key == "body" {
+			L.Push(lua.LString(responseBody.String()))
+			return 1
+		}
 		L.Push(lua.LNil)
 		return 1
 	}))
@@ -332,6 +337,11 @@ func handleLuaScript(w http.ResponseWriter, r *http.Request, scriptPath string, 
 		key := L.CheckString(2)
 		if key == "status" {
 			statusCode = L.CheckInt(3)
+			return 0
+		}
+		if key == "body" {
+			val := L.CheckString(3)
+			responseBody.WriteString(val)
 			return 0
 		}
 		if key == "headers" {
@@ -970,7 +980,12 @@ func handleLuaScript(w http.ResponseWriter, r *http.Request, scriptPath string, 
 			}
 		}
 		w.WriteHeader(statusCode)
-		w.Write(stdout.Bytes())
+
+		if responseBody.Len() > 0 {
+			w.Write(responseBody.Bytes())
+		} else {
+			w.Write(stdout.Bytes())
+		}
 	}
 }
 
