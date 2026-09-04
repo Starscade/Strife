@@ -239,11 +239,16 @@ func parseTemplate(tmplStr string, data *lua.LTable) (string, error) {
 }
 
 func handleLuaScript(w http.ResponseWriter, r *http.Request, scriptPath string, db *sql.DB, rootDir, host string) {
+	// Create a hard timeout for the Lua VM execution (e.g., 30 seconds)
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+
 	L := lua.NewState()
-	defer L.Close()
+	L.SetContext(ctx)
 
 	hostRootDir, err := filepath.Abs(filepath.Join(rootDir, host))
 	if err != nil {
+		L.Close()
 		writeLog("ERROR", "LUA", map[string]string{"error": err.Error(), "host": host})
 		w.WriteHeader(http.StatusInternalServerError)
 		w.Write([]byte("Internal server error"))
@@ -446,7 +451,7 @@ func handleLuaScript(w http.ResponseWriter, r *http.Request, scriptPath string, 
 			method = "GET"
 		}
 
-		req, err := http.NewRequestWithContext(r.Context(), method, urlStr, bodyReader)
+		req, err := http.NewRequestWithContext(ctx, method, urlStr, bodyReader)
 		if err != nil {
 			return pushLuaError(L, err)
 		}
@@ -594,7 +599,7 @@ func handleLuaScript(w http.ResponseWriter, r *http.Request, scriptPath string, 
 				}
 			}
 		}
-		rows, err := db.QueryContext(r.Context(), query, args...)
+		rows, err := db.QueryContext(ctx, query, args...)
 		if err != nil {
 			return pushLuaError(L, err)
 		}
@@ -824,7 +829,7 @@ func handleLuaScript(w http.ResponseWriter, r *http.Request, scriptPath string, 
 			}
 		}
 
-		cmd := exec.CommandContext(r.Context(), name, args...)
+		cmd := exec.CommandContext(ctx, name, args...)
 		var outbuf, errbuf bytes.Buffer
 		cmd.Stdout = &outbuf
 		cmd.Stderr = &errbuf
@@ -957,15 +962,35 @@ func handleLuaScript(w http.ResponseWriter, r *http.Request, scriptPath string, 
 	}
 	reqTable.RawSetString("query", queryTable)
 
-	bodyBytes, _ := io.ReadAll(r.Body)
+	bodyBytes, err := io.ReadAll(r.Body)
+	if err != nil {
+		// If the error is from MaxBytesReader, it will be a specific error type,
+		// but generally, any error here means the request body is invalid or too large.
+		writeLog("ERROR", "REQUEST", map[string]string{"error": "body read failed: " + err.Error()})
+		w.WriteHeader(http.StatusRequestEntityTooLarge)
+		L.Close() // Clean up state since we are returning early
+		return
+	}
 	reqTable.RawSetString("body", lua.LString(string(bodyBytes)))
 
 	strifeTable.RawSetString("request", reqTable)
 	L.SetGlobal("strife", strifeTable)
 
-	if err := L.DoFile(scriptPath); err != nil {
-		writeLog("ERROR", "LUA", map[string]string{"error": err.Error(), "path": scriptPath})
-		w.WriteHeader(http.StatusInternalServerError)
+	done := make(chan error, 1)
+	go func() {
+		defer L.Close()
+		done <- L.DoFile(scriptPath)
+	}()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			writeLog("ERROR", "LUA", map[string]string{"error": err.Error(), "path": scriptPath})
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+	case <-r.Context().Done():
+		writeLog("ERROR", "REQUEST", map[string]string{"error": "client cancelled request", "path": scriptPath})
 		return
 	}
 
@@ -1088,6 +1113,9 @@ func main() {
 	}
 
 	mux := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// PAYLOAD LIMIT: Limit request body to 10MB
+		r.Body = http.MaxBytesReader(w, r.Body, 10*1024*1024)
+
 		host := getCleanHost(r)
 		dir := filepath.Join(rootDir, host)
 
