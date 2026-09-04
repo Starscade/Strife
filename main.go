@@ -70,7 +70,7 @@ func getCleanHost(r *http.Request) string {
 	if h, _, err := net.SplitHostPort(host); err == nil {
 		return h
 	}
-	return host
+	return strings.ToLower(host)
 }
 
 func hasHiddenComponent(hostRootDir, targetPath string) bool {
@@ -941,7 +941,7 @@ func handleLuaScript(w http.ResponseWriter, r *http.Request, scriptPath string, 
 	reqTable.RawSetString("method", lua.LString(strings.ToUpper(r.Method)))
 	reqTable.RawSetString("uri", lua.LString(r.RequestURI))
 	reqTable.RawSetString("path", lua.LString(r.URL.Path))
-	reqTable.RawSetString("host", lua.LString(strings.ToLower(r.Host)))
+	reqTable.RawSetString("host", lua.LString(getCleanHost(r)))
 	reqTable.RawSetString("remote_addr", lua.LString(r.RemoteAddr))
 
 	headersTable := L.NewTable()
