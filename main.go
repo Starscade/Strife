@@ -338,7 +338,17 @@ func handleLuaScript(w http.ResponseWriter, r *http.Request, scriptPath string, 
 			val := L.Get(3)
 			if tbl, ok := val.(*lua.LTable); ok {
 				tbl.ForEach(func(k, v lua.LValue) {
-					headers.Set(k.String(), v.String())
+					var finalVal string
+					if vTbl, ok := v.(*lua.LTable); ok {
+						var parts []string
+						vTbl.ForEach(func(_ lua.LValue, val2 lua.LValue) {
+							parts = append(parts, val2.String())
+						})
+						finalVal = strings.Join(parts, ", ")
+					} else {
+						finalVal = v.String()
+					}
+					headers.Set(k.String(), finalVal)
 				})
 				return 0
 			}
@@ -927,11 +937,7 @@ func handleLuaScript(w http.ResponseWriter, r *http.Request, scriptPath string, 
 
 	headersTable := L.NewTable()
 	for k, vals := range r.Header {
-		luaVals := L.NewTable()
-		for i, v := range vals {
-			luaVals.RawSetInt(i+1, lua.LString(v))
-		}
-		headersTable.RawSetString(k, luaVals)
+		headersTable.RawSetString(k, lua.LString(strings.Join(vals, ", ")))
 	}
 	reqTable.RawSetString("headers", headersTable)
 
