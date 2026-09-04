@@ -73,6 +73,10 @@ func getCleanHost(r *http.Request) string {
 	return strings.ToLower(host)
 }
 
+func getCleanMethod(r *http.Request) string {
+	return strings.ToLower(r.Method)
+}
+
 func hasHiddenComponent(hostRootDir, targetPath string) bool {
 	rel, err := filepath.Rel(hostRootDir, targetPath)
 	if err != nil || rel == "." {
@@ -938,7 +942,7 @@ func handleLuaScript(w http.ResponseWriter, r *http.Request, scriptPath string, 
 	strifeTable.RawSetString("crypto", cryptoTable)
 
 	reqTable := L.NewTable()
-	reqTable.RawSetString("method", lua.LString(strings.ToUpper(r.Method)))
+	reqTable.RawSetString("method", lua.LString(getCleanMethod(r)))
 	reqTable.RawSetString("uri", lua.LString(r.RequestURI))
 	reqTable.RawSetString("path", lua.LString(r.URL.Path))
 	reqTable.RawSetString("host", lua.LString(getCleanHost(r)))
@@ -1166,7 +1170,7 @@ func main() {
 		writeLog("INFO", "REQUEST", map[string]interface{}{
 			"host":       getCleanHost(r),
 			"ip_address": r.RemoteAddr,
-			"method":     r.Method,
+			"method":     getCleanMethod(r),
 			"ms_elapsed": float64(time.Since(start).Microseconds()) / 1000.0,
 			"path":       r.URL.Path,
 			"status":     rec.status,
