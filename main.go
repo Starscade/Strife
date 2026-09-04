@@ -253,7 +253,6 @@ func handleLuaScript(w http.ResponseWriter, r *http.Request, scriptPath string, 
 		return
 	}
 
-	var stdout bytes.Buffer
 	var statusCode = http.StatusOK
 	headers := make(http.Header)
 	var responseBody bytes.Buffer
@@ -265,7 +264,7 @@ func handleLuaScript(w http.ResponseWriter, r *http.Request, scriptPath string, 
 		for i := 1; i <= top; i++ {
 			args = append(args, L.ToString(i))
 		}
-		stdout.WriteString(strings.Join(args, "\t") + "\n")
+		responseBody.WriteString(strings.Join(args, "\t") + "\n")
 		return 0
 	}))
 
@@ -980,12 +979,7 @@ func handleLuaScript(w http.ResponseWriter, r *http.Request, scriptPath string, 
 			}
 		}
 		w.WriteHeader(statusCode)
-
-		if responseBody.Len() > 0 {
-			w.Write(responseBody.Bytes())
-		} else {
-			w.Write(stdout.Bytes())
-		}
+		w.Write(responseBody.Bytes())
 	}
 }
 
