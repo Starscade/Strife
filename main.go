@@ -946,7 +946,7 @@ func handleLuaScript(w http.ResponseWriter, r *http.Request, scriptPath string, 
 
 	headersTable := L.NewTable()
 	for k, vals := range r.Header {
-		headersTable.RawSetString(k, lua.LString(strings.Join(vals, ", ")))
+		headersTable.RawSetString(strings.ToLower(k), lua.LString(strings.Join(vals, ", ")))
 	}
 	reqTable.RawSetString("headers", headersTable)
 
