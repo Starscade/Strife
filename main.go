@@ -303,11 +303,11 @@ func handleLuaScript(w http.ResponseWriter, r *http.Request, scriptPath string, 
 	}))
 	hMeta.RawSetString("__newindex", L.NewFunction(func(L *lua.LState) int {
 		key := L.CheckString(2)
-		val := L.CheckString(3)
-		if val == "" {
+		val := L.Get(3)
+		if val == lua.LNil || val == lua.LString("") {
 			headers.Del(key)
 		} else {
-			headers.Set(key, val)
+			headers.Set(key, val.String())
 		}
 		return 0
 	}))
