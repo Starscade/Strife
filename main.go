@@ -74,7 +74,7 @@ func getCleanHost(r *http.Request) string {
 }
 
 func getCleanMethod(r *http.Request) string {
-	return strings.ToLower(r.Method)
+	return strings.ToUpper(r.Method)
 }
 
 func hasHiddenComponent(hostRootDir, targetPath string) bool {
