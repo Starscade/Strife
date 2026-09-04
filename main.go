@@ -36,21 +36,14 @@ type contextKey string
 
 const cancelKey contextKey = "cancel"
 
-type responseRecorder struct {
+type statusWriter struct {
 	http.ResponseWriter
 	status int
-	size   int64
 }
 
-func (rec *responseRecorder) WriteHeader(code int) {
-	rec.status = code
-	rec.ResponseWriter.WriteHeader(code)
-}
-
-func (rec *responseRecorder) Write(b []byte) (int, error) {
-	n, err := rec.ResponseWriter.Write(b)
-	rec.size += int64(n)
-	return n, err
+func (w *statusWriter) WriteHeader(code int) {
+	w.status = code
+	w.ResponseWriter.WriteHeader(code)
 }
 
 func writeLog(level, topic string, details interface{}) {
@@ -1164,8 +1157,8 @@ func main() {
 
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
-		rec := &responseRecorder{ResponseWriter: w, status: http.StatusOK}
-		mux.ServeHTTP(rec, r)
+		sw := &statusWriter{ResponseWriter: w, status: http.StatusOK}
+		mux.ServeHTTP(sw, r)
 
 		writeLog("INFO", "REQUEST", map[string]interface{}{
 			"host":       getCleanHost(r),
@@ -1173,7 +1166,7 @@ func main() {
 			"method":     getCleanMethod(r),
 			"ms_elapsed": float64(time.Since(start).Microseconds()) / 1000.0,
 			"path":       r.URL.Path,
-			"status":     rec.status,
+			"status":     sw.status,
 			"user_agent": r.UserAgent(),
 		})
 	})
