@@ -1,6 +1,6 @@
 # Strife
 
-### Instant, personal BaaS.
+### Instant, local BaaS.
 ---
 
 ###### USAGE
