@@ -593,7 +593,17 @@ func handleLuaScript(w http.ResponseWriter, r *http.Request, scriptPath string, 
 			for i := 2; i <= top; i++ {
 				val := L.Get(i)
 				if s, ok := val.(lua.LString); ok {
-					args = append(args, []byte(s))
+					// Lua strings default to Go strings (TEXT in SQLite)
+					args = append(args, string(s))
+				} else if tbl, ok := val.(*lua.LTable); ok {
+					// Special handling for binary blobs: {blob = "..."}
+					if blobVal := tbl.RawGetString("blob"); blobVal != lua.LNil {
+						if bStr, ok := blobVal.(lua.LString); ok {
+							args = append(args, []byte(bStr))
+							continue
+						}
+					}
+					args = append(args, luaValueToGo(val))
 				} else {
 					args = append(args, luaValueToGo(val))
 				}
@@ -632,6 +642,7 @@ func handleLuaScript(w http.ResponseWriter, r *http.Request, scriptPath string, 
 				}
 				switch v := val.(type) {
 				case []byte:
+					// In results, binary data (BLOB) is returned as LString
 					rowTable.RawSetString(col, lua.LString(string(v)))
 				case int64:
 					rowTable.RawSetString(col, lua.LNumber(v))
