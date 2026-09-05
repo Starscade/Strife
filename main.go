@@ -36,6 +36,8 @@ type contextKey string
 
 const cancelKey contextKey = "cancel"
 
+var version = ""
+
 type statusWriter struct {
 	http.ResponseWriter
 	status int
@@ -1087,6 +1089,15 @@ func tryServeIndexOrScript(w http.ResponseWriter, r *http.Request, targetPath st
 }
 
 func main() {
+	if len(os.Args) > 1 {
+		if strings.HasSuffix(os.Args[1], "-version") {
+			fmt.Println(version)
+			os.Exit(0)
+		} else {
+			os.Exit(1)
+		}
+	}
+
 	db, err := sql.Open("sqlite", ":memory:")
 	if err != nil || db.Ping() != nil {
 		if db != nil {
