@@ -275,13 +275,13 @@ func handleLuaScript(w http.ResponseWriter, r *http.Request, scriptPath string, 
 	strifeTable := L.NewTable()
 
 	strifeTable.RawSetString("log", L.NewFunction(func(L *lua.LState) int {
-		level := "INFO"
 		var details interface{}
+		level := "INFO"
 
 		top := L.GetTop()
 		if top >= 2 {
-			level = strings.ToUpper(L.CheckString(1))
-			details = luaValueToGo(L.Get(2))
+			details = luaValueToGo(L.Get(1))
+			level = strings.ToUpper(L.CheckString(2))
 		} else if top == 1 {
 			details = luaValueToGo(L.Get(1))
 		} else {
