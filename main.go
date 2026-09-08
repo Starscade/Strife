@@ -222,19 +222,7 @@ func luaValueToGo(val lua.LValue) interface{} {
 }
 
 func parseTemplate(tmplStr string, data *lua.LTable, rootDir, host, scriptPath string) (string, error) {
-	t, err := template.New("template").Funcs(template.FuncMap{
-		"readFile": func(relPath string) string {
-			fullPath, err := resolveHostPath(rootDir, host, scriptPath, relPath)
-			if err != nil {
-				return fmt.Sprintf("[Error resolving path: %v]", err)
-			}
-			content, err := os.ReadFile(fullPath)
-			if err != nil {
-				return fmt.Sprintf("[Error reading file: %v]", err)
-			}
-			return string(content)
-		},
-	}).Parse(tmplStr)
+	t, err := template.New("template").Parse(tmplStr)
 	if err != nil {
 		return "", err
 	}
