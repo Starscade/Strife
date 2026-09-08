@@ -172,7 +172,7 @@ func goValueToLua(L *lua.LState, val interface{}) lua.LValue {
 		}
 		return tbl
 	default:
-		return lua.LString(string([]byte{}))
+		return lua.LString("")
 	}
 }
 
