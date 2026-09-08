@@ -221,8 +221,20 @@ func luaValueToGo(val lua.LValue) interface{} {
 	}
 }
 
-func parseTemplate(tmplStr string, data *lua.LTable) (string, error) {
-	t, err := template.New("template").Parse(tmplStr)
+func parseTemplate(tmplStr string, data *lua.LTable, rootDir, host, scriptPath string) (string, error) {
+	t, err := template.New("template").Funcs(template.FuncMap{
+		"readFile": func(relPath string) string {
+			fullPath, err := resolveHostPath(rootDir, host, scriptPath, relPath)
+			if err != nil {
+				return fmt.Sprintf("[Error resolving path: %v]", err)
+			}
+			content, err := os.ReadFile(fullPath)
+			if err != nil {
+				return fmt.Sprintf("[Error reading file: %v]", err)
+			}
+			return string(content)
+		},
+	}).Parse(tmplStr)
 	if err != nil {
 		return "", err
 	}
@@ -395,7 +407,7 @@ func handleLuaScript(w http.ResponseWriter, r *http.Request, scriptPath string, 
 				dataTbl = tbl
 			}
 		}
-		result, err := parseTemplate(tmplStr, dataTbl)
+		result, err := parseTemplate(tmplStr, dataTbl, rootDir, host, scriptPath)
 		if err != nil {
 			L.Push(lua.LNil)
 			L.Push(lua.LString(err.Error()))
