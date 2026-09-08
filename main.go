@@ -222,7 +222,7 @@ func luaValueToGo(val lua.LValue) interface{} {
 }
 
 func parseTemplate(tmplStr string, data *lua.LTable) (string, error) {
-	t, err := template.New("template").Option("missingkey=zero").Parse(tmplStr)
+	t, err := template.New("template").Option("missingkey=invalid").Parse(tmplStr)
 	if err != nil {
 		return "", err
 	}
