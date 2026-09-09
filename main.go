@@ -38,6 +38,30 @@ const cancelKey contextKey = "cancel"
 
 var version = ""
 
+type config struct {
+	port    int
+	rootDir string
+	sqlPath string
+}
+
+func loadConfig() config {
+	port := 8080
+	if pEnv := os.Getenv("STRIFE_PORT"); pEnv != "" {
+		if p, err := strconv.Atoi(pEnv); err == nil {
+			port = p
+		}
+	}
+	rootDir := os.Getenv("STRIFE_ROOT")
+	if rootDir == "" {
+		rootDir = "."
+	}
+	return config{
+		port:    port,
+		rootDir: rootDir,
+		sqlPath: os.Getenv("STRIFE_SQL"),
+	}
+}
+
 type statusWriter struct {
 	http.ResponseWriter
 	status int
@@ -240,15 +264,14 @@ func parseTemplate(tmplStr string, data *lua.LTable, rootDir, host, scriptPath s
 	return buf.String(), nil
 }
 
-func handleLuaScript(w http.ResponseWriter, r *http.Request, scriptPath string, db *sql.DB, rootDir, host string) {
-	// Create a hard timeout for the Lua VM execution (e.g., 30 seconds)
+func handleLuaScript(w http.ResponseWriter, r *http.Request, scriptPath string, db *sql.DB, cfg config, host string) {
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
 
 	L := lua.NewState()
 	L.SetContext(ctx)
 
-	hostRootDir, err := filepath.Abs(filepath.Join(rootDir, host))
+	hostRootDir, err := filepath.Abs(filepath.Join(cfg.rootDir, host))
 	if err != nil {
 		L.Close()
 		writeLog("ERROR", "LUA", map[string]string{"error": err.Error(), "host": host})
@@ -395,7 +418,7 @@ func handleLuaScript(w http.ResponseWriter, r *http.Request, scriptPath string, 
 				dataTbl = tbl
 			}
 		}
-		result, err := parseTemplate(tmplStr, dataTbl, rootDir, host, scriptPath)
+		result, err := parseTemplate(tmplStr, dataTbl, cfg.rootDir, host, scriptPath)
 		if err != nil {
 			L.Push(lua.LNil)
 			L.Push(lua.LString(err.Error()))
@@ -671,7 +694,7 @@ func handleLuaScript(w http.ResponseWriter, r *http.Request, scriptPath string, 
 	fileTable := L.NewTable()
 
 	fileTable.RawSetString("read", L.NewFunction(func(L *lua.LState) int {
-		targetPath, err := resolveHostPath(rootDir, host, scriptPath, L.CheckString(1))
+		targetPath, err := resolveHostPath(cfg.rootDir, host, scriptPath, L.CheckString(1))
 		if err != nil {
 			return pushLuaError(L, err)
 		}
@@ -685,12 +708,11 @@ func handleLuaScript(w http.ResponseWriter, r *http.Request, scriptPath string, 
 	}))
 
 	fileTable.RawSetString("write", L.NewFunction(func(L *lua.LState) int {
-		targetPath, err := resolveHostPath(rootDir, host, scriptPath, L.CheckString(1))
+		targetPath, err := resolveHostPath(cfg.rootDir, host, scriptPath, L.CheckString(1))
 		if err != nil {
 			return pushLuaBoolResult(L, false, err)
 		}
 
-		// Ensure parent directory exists and is a directory; do not create if missing
 		parentDir := filepath.Dir(targetPath)
 		parentInfo, err := os.Stat(parentDir)
 		if err != nil {
@@ -714,17 +736,16 @@ func handleLuaScript(w http.ResponseWriter, r *http.Request, scriptPath string, 
 	}))
 
 	fileTable.RawSetString("move", L.NewFunction(func(L *lua.LState) int {
-		sourcePath, err := resolveHostPath(rootDir, host, scriptPath, L.CheckString(1))
+		sourcePath, err := resolveHostPath(cfg.rootDir, host, scriptPath, L.CheckString(1))
 		if err != nil {
 			return pushLuaBoolResult(L, false, err)
 		}
 
-		destinationPath, err := resolveHostPath(rootDir, host, scriptPath, L.CheckString(2))
+		destinationPath, err := resolveHostPath(cfg.rootDir, host, scriptPath, L.CheckString(2))
 		if err != nil {
 			return pushLuaBoolResult(L, false, err)
 		}
 
-		// Ensure destination parent directory exists and is a directory; do not create if missing
 		destParentDir := filepath.Dir(destinationPath)
 		parentInfo, err := os.Stat(destParentDir)
 		if err != nil {
@@ -747,7 +768,7 @@ func handleLuaScript(w http.ResponseWriter, r *http.Request, scriptPath string, 
 	}))
 
 	fileTable.RawSetString("list", L.NewFunction(func(L *lua.LState) int {
-		targetPath, err := resolveHostPath(rootDir, host, scriptPath, L.CheckString(1))
+		targetPath, err := resolveHostPath(cfg.rootDir, host, scriptPath, L.CheckString(1))
 		if err != nil {
 			return pushLuaError(L, err)
 		}
@@ -766,6 +787,7 @@ func handleLuaScript(w http.ResponseWriter, r *http.Request, scriptPath string, 
 			entryTable.RawSetString("name", lua.LString(entry.Name()))
 
 			childFullPath := filepath.Join(targetPath, entry.Name())
+			hostRootDir, _ := filepath.Abs(filepath.Join(cfg.rootDir, host))
 			hostRel, relErr := toHostRelativePath(hostRootDir, childFullPath)
 			if relErr == nil {
 				entryTable.RawSetString("path", lua.LString(hostRel))
@@ -1073,10 +1095,10 @@ func findMatchingPath(hostRootDir, requestPath string) (string, bool) {
 	return search(hostRootDir, 0)
 }
 
-func tryServeIndexOrScript(w http.ResponseWriter, r *http.Request, targetPath string, db *sql.DB, rootDir, host string) bool {
+func tryServeIndexOrScript(w http.ResponseWriter, r *http.Request, targetPath string, db *sql.DB, cfg config, host string) bool {
 	luaIndex := filepath.Join(targetPath, "index.lua")
 	if info, err := os.Stat(luaIndex); err == nil && !info.IsDir() {
-		handleLuaScript(w, r, luaIndex, db, rootDir, host)
+		handleLuaScript(w, r, luaIndex, db, cfg, host)
 		return true
 	}
 
@@ -1089,9 +1111,15 @@ func tryServeIndexOrScript(w http.ResponseWriter, r *http.Request, targetPath st
 }
 
 func main() {
+	cfg := loadConfig()
+
 	if len(os.Args) > 1 {
-		if strings.HasSuffix(os.Args[1], "-version") {
+		arg := os.Args[1]
+		if arg == "-version" {
 			fmt.Println(version)
+			os.Exit(0)
+		} else if arg == "--print-env" {
+			fmt.Printf("STRIFE_PORT=%d\nSTRIFE_ROOT=%s\nSTRIFE_SQL=%s\n", cfg.port, cfg.rootDir, cfg.sqlPath)
 			os.Exit(0)
 		} else {
 			os.Exit(1)
@@ -1110,36 +1138,22 @@ func main() {
 
 	db.SetMaxOpenConns(1)
 
-	initSQLPath := os.Getenv("STRIFE_SQL")
-	if initSQLPath != "" {
-		sqlBytes, err := os.ReadFile(initSQLPath)
+	if cfg.sqlPath != "" {
+		sqlBytes, err := os.ReadFile(cfg.sqlPath)
 		if err != nil {
-			writeLog("ERROR", "DATABASE", map[string]string{"error": err.Error(), "path": initSQLPath})
+			writeLog("ERROR", "DATABASE", map[string]string{"error": err.Error(), "path": cfg.sqlPath})
 		} else {
 			if _, err := db.Exec(string(sqlBytes)); err != nil {
-				writeLog("ERROR", "DATABASE", map[string]string{"error": err.Error(), "path": initSQLPath})
+				writeLog("ERROR", "DATABASE", map[string]string{"error": err.Error(), "path": cfg.sqlPath})
 			}
 		}
 	}
 
-	port := 8080
-	if portEnv := os.Getenv("STRIFE_PORT"); portEnv != "" {
-		if p, err := strconv.Atoi(portEnv); err == nil {
-			port = p
-		}
-	}
-
-	rootDir := os.Getenv("STRIFE_ROOT")
-	if rootDir == "" {
-		rootDir = "."
-	}
-
 	mux := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// PAYLOAD LIMIT: Limit request body to 10MB
 		r.Body = http.MaxBytesReader(w, r.Body, 10*1024*1024)
 
 		host := getCleanHost(r)
-		dir := filepath.Join(rootDir, host)
+		dir := filepath.Join(cfg.rootDir, host)
 
 		ctx, cancel := context.WithCancel(r.Context())
 		defer cancel()
@@ -1171,7 +1185,7 @@ func main() {
 			if info, err := os.Stat(cleanTarget); err == nil && !info.IsDir() {
 				// Fallthrough
 			} else {
-				if tryServeIndexOrScript(w, r, cleanTarget, db, rootDir, host) {
+				if tryServeIndexOrScript(w, r, cleanTarget, db, cfg, host) {
 					return
 				}
 				if infoDir, err := os.Stat(cleanTarget); err == nil && infoDir.IsDir() {
@@ -1183,7 +1197,7 @@ func main() {
 
 		if strings.HasSuffix(cleanTarget, ".lua") {
 			if info, err := os.Stat(cleanTarget); err == nil && !info.IsDir() {
-				handleLuaScript(w, r, cleanTarget, db, rootDir, host)
+				handleLuaScript(w, r, cleanTarget, db, cfg, host)
 				return
 			}
 		}
@@ -1195,7 +1209,7 @@ func main() {
 		}
 
 		if err == nil && info.IsDir() {
-			if tryServeIndexOrScript(w, r, cleanTarget, db, rootDir, host) {
+			if tryServeIndexOrScript(w, r, cleanTarget, db, cfg, host) {
 				return
 			}
 			w.WriteHeader(http.StatusForbidden)
@@ -1222,7 +1236,7 @@ func main() {
 	})
 
 	server := &http.Server{
-		Addr:    ":" + strconv.Itoa(port),
+		Addr:    ":" + strconv.Itoa(cfg.port),
 		Handler: handler,
 	}
 
@@ -1230,9 +1244,9 @@ func main() {
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 
 	writeLog("INFO", "SERVER", map[string]interface{}{
-		"port": port,
-		"root": rootDir,
-		"sql":  initSQLPath,
+		"port": cfg.port,
+		"root": cfg.rootDir,
+		"sql":  cfg.sqlPath,
 	})
 
 	go func() {
