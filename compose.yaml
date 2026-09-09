@@ -8,3 +8,5 @@ services:
       - "${STRIFE_PORT:-8080}:8080"
     volumes:
       - "${STRIFE_ROOT:-./}:/srv/www"
+
+
