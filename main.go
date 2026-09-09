@@ -787,7 +787,6 @@ func handleLuaScript(w http.ResponseWriter, r *http.Request, scriptPath string, 
 			entryTable.RawSetString("name", lua.LString(entry.Name()))
 
 			childFullPath := filepath.Join(targetPath, entry.Name())
-			hostRootDir, _ := filepath.Abs(filepath.Join(cfg.rootDir, host))
 			hostRel, relErr := toHostRelativePath(hostRootDir, childFullPath)
 			if relErr == nil {
 				entryTable.RawSetString("path", lua.LString(hostRel))
