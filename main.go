@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/hmac"
@@ -44,21 +45,63 @@ type config struct {
 	sqlPath string
 }
 
-func loadConfig() config {
+func loadDotEnv(path string) (map[string]string, error) {
+	vars := make(map[string]string)
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		parts := strings.SplitN(line, "=", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		vars[strings.TrimSpace(parts[0])] = strings.TrimSpace(parts[1])
+	}
+	return vars, scanner.Err()
+}
+
+func loadConfig(dotenvPaths []string) config {
+	envVars := make(map[string]string)
+	for _, path := range dotenvPaths {
+		if vars, err := loadDotEnv(path); err == nil {
+			for k, v := range vars {
+				envVars[k] = v
+			}
+		}
+	}
+
+	getEnv := func(key string) string {
+		if val, ok := envVars[key]; ok {
+			return val
+		}
+		return os.Getenv(key)
+	}
+
 	port := 8080
-	if pEnv := os.Getenv("STRIFE_PORT"); pEnv != "" {
+	pEnv := getEnv("STRIFE_PORT")
+	if pEnv != "" {
 		if p, err := strconv.Atoi(pEnv); err == nil {
 			port = p
 		}
 	}
-	rootDir := os.Getenv("STRIFE_ROOT")
+
+	rootDir := getEnv("STRIFE_ROOT")
 	if rootDir == "" {
 		rootDir = "."
 	}
+
 	return config{
 		port:    port,
 		rootDir: rootDir,
-		sqlPath: os.Getenv("STRIFE_SQL"),
+		sqlPath: getEnv("STRIFE_SQL"),
 	}
 }
 
@@ -1110,19 +1153,31 @@ func tryServeIndexOrScript(w http.ResponseWriter, r *http.Request, targetPath st
 }
 
 func main() {
-	cfg := loadConfig()
+	var dotenvPaths []string
+	var printEnv bool
 
-	if len(os.Args) > 1 {
-		arg := os.Args[1]
+	for i := 1; i < len(os.Args); i++ {
+		arg := os.Args[i]
 		if arg == "-version" {
 			fmt.Println(version)
 			os.Exit(0)
-		} else if arg == "--print-env" {
-			fmt.Printf("STRIFE_PORT=%d\nSTRIFE_ROOT=%s\nSTRIFE_SQL=%s\n", cfg.port, cfg.rootDir, cfg.sqlPath)
-			os.Exit(0)
-		} else {
-			os.Exit(1)
+		} else if arg == "--dotenv" {
+			if i+1 < len(os.Args) {
+				dotenvPaths = append(dotenvPaths, os.Args[i+1])
+				i++
+			}
+		} else if arg == "--printenv" {
+			printEnv = true
 		}
+	}
+
+	cfg := loadConfig(dotenvPaths)
+
+	if printEnv {
+		fmt.Printf("STRIFE_PORT=%d\n", cfg.port)
+		fmt.Printf("STRIFE_ROOT=%s\n", cfg.rootDir)
+		fmt.Printf("STRIFE_SQL=%s\n", cfg.sqlPath)
+		os.Exit(0)
 	}
 
 	db, err := sql.Open("sqlite", ":memory:")
