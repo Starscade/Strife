@@ -1235,38 +1235,30 @@ func main() {
 			return
 		}
 
-		if r.URL.Path == "/" || strings.HasSuffix(r.URL.Path, "/") {
-			if info, err := os.Stat(cleanTarget); err == nil && !info.IsDir() {
-				// Fallthrough
-			} else {
-				if tryServeIndexOrScript(w, r, cleanTarget, db, cfg, host) {
-					return
-				}
-				if infoDir, err := os.Stat(cleanTarget); err == nil && infoDir.IsDir() {
-					w.WriteHeader(http.StatusForbidden)
-					return
-				}
-			}
-		}
-
-		if strings.HasSuffix(cleanTarget, ".lua") {
-			if info, err := os.Stat(cleanTarget); err == nil && !info.IsDir() {
-				handleLuaScript(w, r, cleanTarget, db, cfg, host)
-				return
-			}
-		}
-
 		info, err := os.Stat(cleanTarget)
-		if os.IsNotExist(err) {
-			w.WriteHeader(http.StatusNotFound)
+		if err != nil {
+			if os.IsNotExist(err) {
+				w.WriteHeader(http.StatusNotFound)
+			} else {
+				w.WriteHeader(http.StatusInternalServerError)
+			}
 			return
 		}
 
-		if err == nil && info.IsDir() {
+		if info.IsDir() {
+			if r.URL.Path != "/" && !strings.HasSuffix(r.URL.Path, "/") {
+				http.Redirect(w, r, r.URL.Path+"/", http.StatusTemporaryRedirect)
+				return
+			}
 			if tryServeIndexOrScript(w, r, cleanTarget, db, cfg, host) {
 				return
 			}
 			w.WriteHeader(http.StatusForbidden)
+			return
+		}
+
+		if strings.HasSuffix(cleanTarget, ".lua") {
+			handleLuaScript(w, r, cleanTarget, db, cfg, host)
 			return
 		}
 
