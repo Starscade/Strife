@@ -1247,7 +1247,11 @@ func main() {
 
 		if info.IsDir() {
 			if r.URL.Path != "/" && !strings.HasSuffix(r.URL.Path, "/") {
-				http.Redirect(w, r, r.URL.Path+"/", http.StatusTemporaryRedirect)
+				target := r.URL.Path + "/"
+				if r.URL.RawQuery != "" {
+					target += "?" + r.URL.RawQuery
+				}
+				http.Redirect(w, r, target, http.StatusTemporaryRedirect)
 				return
 			}
 			if tryServeIndexOrScript(w, r, cleanTarget, db, cfg, host) {
