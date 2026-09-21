@@ -146,6 +146,9 @@ func hasHiddenComponent(hostRootDir, targetPath string) bool {
 	}
 	parts := strings.Split(rel, string(filepath.Separator))
 	for _, part := range parts {
+		if part == ".well-known" {
+			continue // Allow access for standard config exposure, etc.
+		}
 		if strings.HasPrefix(part, ".") && part != "." && part != ".." && part != "_" {
 			return true
 		}
