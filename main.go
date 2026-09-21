@@ -37,7 +37,7 @@ type contextKey string
 
 const cancelKey contextKey = "cancel"
 
-var version = ""
+var Version = ""
 
 type config struct {
 	port    int
@@ -1158,8 +1158,8 @@ func main() {
 
 	for i := 1; i < len(os.Args); i++ {
 		arg := os.Args[i]
-		if arg == "-version" {
-			fmt.Println(version)
+		if arg == "--version" {
+			fmt.Println(Version)
 			os.Exit(0)
 		} else if arg == "--dotenv" {
 			if i+1 < len(os.Args) {

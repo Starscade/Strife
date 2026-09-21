@@ -1,8 +1,12 @@
 FROM golang:alpine AS builder
 
+RUN apk add --no-cache git make
+
 WORKDIR /app
-COPY go.mod go.sum main.go install.sh .
-RUN ./install.sh
+
+COPY . .
+
+RUN make
 
 
 FROM scratch
