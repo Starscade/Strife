@@ -10,7 +10,7 @@ all:
 	@mkdir -p ~/.local/bin   && \
 	 go mod tidy             && \
 	 go fmt                  && \
-	 CGO_ENABLED=0a             \
+	 CGO_ENABLED=0              \
 	 go build                   \
 	   -ldflags="$(LDFLAGS)"    \
 	   -o ~/.local/bin/Strife   \
