@@ -1,17 +1,19 @@
 FROM golang:alpine AS builder
 
-RUN apk add --no-cache git make
+ARG NAME
+ARG INSTALL_PATH
 
-WORKDIR /app
+RUN apk add --no-cache git make upx
+
+WORKDIR /foo
 
 COPY . .
 
-RUN make
+RUN make INSTALL_PATH=${INSTALL_PATH} NAME=${NAME} && upx -9 --lzma ${INSTALL_PATH}
 
+FROM scratch AS export
 
-FROM scratch
+ARG NAME
+ARG INSTALL_PATH
 
-COPY --from=builder /root/.local/bin/Strife /usr/local/bin/Strife
-WORKDIR /srv/www
-
-ENTRYPOINT ["Strife"]
+COPY --from=builder ${INSTALL_PATH} /${NAME}
