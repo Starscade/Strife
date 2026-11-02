@@ -8,6 +8,7 @@ import (
 	"crypto/rand"
 	"crypto/sha1"
 	"database/sql"
+	"embed"
 	"encoding/base32"
 	"encoding/base64"
 	"encoding/binary"
@@ -38,6 +39,9 @@ type contextKey string
 const cancelKey contextKey = "cancel"
 
 var Version = ""
+
+//go:embed llms.txt
+var embeddedFiles embed.FS
 
 type config struct {
 	port    int
@@ -1208,6 +1212,17 @@ func main() {
 
 	mux := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		r.Body = http.MaxBytesReader(w, r.Body, 10*1024*1024)
+
+		if r.URL.Path == "/llms.txt" {
+			data, err := embeddedFiles.ReadFile("llms.txt")
+			if err != nil {
+				w.WriteHeader(http.StatusNotFound)
+				return
+			}
+			w.Header().Set("Content-Type", "text/plain")
+			w.Write(data)
+			return
+		}
 
 		host := getCleanHost(r)
 		dir := filepath.Join(cfg.rootDir, host)
