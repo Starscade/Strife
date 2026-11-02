@@ -4,7 +4,7 @@
 GIT_BRANCH != git branch --show-current 2>/dev/null || echo main
 GIT_TAG != git describe --tags --always 2>/dev/null || echo v0
 INSTALL_DIR = $(HOME)/.local/bin
-NAME != basename "$$(pwd)"
+NAME != basename "$$(pwd)" | tr '[:upper:]' '[:lower:]'
 LDFLAGS = -s -w -X 'main.Version=$(GIT_TAG)-$(GIT_BRANCH)'
 
 INSTALL_PATH = $(INSTALL_DIR)/$(NAME)
@@ -34,23 +34,17 @@ dock:
 	             --output "$(INSTALL_DIR)" .
 
 
-dock-img:
+run:
 
-	@docker build --no-cache -t $(NAME) .
-
-
-dock-run:
-
-	@                                    \
-	docker rm  -f         $(NAME)     && \
-	docker run --env-file .env           \
-	           --name     $(NAME)        \
-	           --restart  unless-stopped \
-	                      $(NAME)
-
-
-test:
-
-	@go vet --race && go test --json
+	@                                                                 \
+	docker rm  -f         $(NAME)                                  && \
+	docker run -d                                                     \
+	           --env      STRIFE_ROOT=/srv/www                        \
+	           --name     $(NAME)                                     \
+	           --network  host                                        \
+	           --restart  unless-stopped                              \
+	           --volume   "$(INSTALL_PATH):/usr/local/bin/$(NAME):ro" \
+	           --volume   "/srv/www:/srv/www:ro"                      \
+	                      alpine $(NAME)
 
 
