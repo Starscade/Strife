@@ -40,7 +40,7 @@ const cancelKey contextKey = "cancel"
 
 var Version = ""
 
-//go:embed llms.txt
+//go:embed README.md
 var embeddedFiles embed.FS
 
 type config struct {
@@ -1214,7 +1214,7 @@ func main() {
 		r.Body = http.MaxBytesReader(w, r.Body, 10*1024*1024)
 
 		if r.URL.Path == "/llms.txt" {
-			data, err := embeddedFiles.ReadFile("llms.txt")
+			data, err := embeddedFiles.ReadFile("README.md")
 			if err != nil {
 				w.WriteHeader(http.StatusNotFound)
 				return
